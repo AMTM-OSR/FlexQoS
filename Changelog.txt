@@ -1,3 +1,22 @@
+v1.4.6 (18-May-2025)
+  - CHANGED: Moved FlexQoS under AMTM-OSR organization for orphaned scripts
+
+v1.4.5 (26-Mar-2025)
+  - CHANGED: Show custom bandwidth values in base 10 instead of base 2 to more accurately reflect the underlying settings
+  - CHANGED: Only create static appdb rules if iptables rules exist
+  - FIXED: Remove leftover temp file in /tmp after starting
+  - FIXED: Reorder js file loading for 3006.102 firmware
+
+v1.4.4 (26-Nov-2024)
+  - FIXED: Arithmetic error with fractional bandwidth in FC control
+
+v1.4.3 (18-Jun-2024)
+  - CHANGED: switch to CDN-based chart.min.js library to avoid discrepancies among 386, 388 and 102 firmware branches
+  - REMOVED: support for develop branch
+
+v1.4.2 (18-May-2024)
+  - FIXED: Fix flow cache auto disable logic when no iptables rules exist
+
 v1.4.1 (13-May-2024)
   - CHANGED: Allow all iptables rules to be deleted. Previously, removing all iptables rules was equivalent to resetting to the default rules.
 
