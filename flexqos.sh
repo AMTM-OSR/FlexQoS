@@ -8,12 +8,12 @@
 #      |_|     |_| \___|/_/\_\ \___\_\ \___/|_____/       #
 #                                                         #
 ###########################################################
-# FlexQoS maintained by dave14305
+# FlexQoS maintained by AMTM-OSR
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.3
-release=2024-06-18
+version=1.4.6
+release=2025-05-18
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -31,7 +31,7 @@ fi
 # Global variables
 readonly SCRIPTNAME_DISPLAY="FlexQoS"
 readonly SCRIPTNAME="flexqos"
-readonly GIT_URL="https://raw.githubusercontent.com/dave14305/${SCRIPTNAME_DISPLAY}/master"
+readonly GIT_URL="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}/master"
 
 readonly ADDON_DIR="/jffs/addons/${SCRIPTNAME}"
 readonly WEBUIPATH="${ADDON_DIR}/${SCRIPTNAME}.asp"
@@ -162,6 +162,7 @@ write_appdb_static_rules() {
 	# so we want these filters to always take precedence over the built-in filters.
 	# File is overwritten (>) if it exists and later appended by write_appdb_rules() and write_custom_rates().
 	{
+	if [ -n "${iptables_rules}" ]; then
 		get_static_filter "${Net_mark}" "${Net_flow}"
 		get_static_filter "${Work_mark}" "${Work_flow}"
 		get_static_filter "${Gaming_mark}" "${Gaming_flow}"
@@ -170,6 +171,7 @@ write_appdb_static_rules() {
 		get_static_filter "${Streaming_mark}" "${Streaming_flow}"
 		get_static_filter "${Downloads_mark}" "${Downloads_flow}"
 		get_static_filter "${Learn_mark}" "${Learn_flow}"
+	fi
 	} > "/tmp/${SCRIPTNAME}_tcrules"
 } # write_appdb_static_rules
 
@@ -911,7 +913,7 @@ License
 
 For discussion visit this thread:
   https://www.snbforums.com/forums/asuswrt-merlin-addons.60/?prefix_id=8
-  https://github.com/dave14305/FlexQoS (Source Code)
+  https://github.com/AMTM-OSR/FlexQoS (Source Code)
 
 About
   Script Changes Unidentified traffic destination away from Work-From-Home into Others
@@ -1193,7 +1195,7 @@ remove_webui() {
 		# Remove last mounted asp page
 		rm -f "/www/user/${prev_webui_page}" 2>/dev/null
 		# Look for previously mounted asp pages that are orphaned now and delete them
-		/bin/grep -l "${SCRIPTNAME_DISPLAY} maintained by dave14305" /www/user/user*.asp 2>/dev/null | while read -r oldfile
+		/bin/grep -l "${SCRIPTNAME_DISPLAY} maintained by " /www/user/user*.asp 2>/dev/null | while read -r oldfile
 		do
 			rm "${oldfile}"
 		done
@@ -1657,8 +1659,8 @@ startup() {
 	case "$(uname -r)" in
 	4.19.*)
 		if \
-		[ "$(nvram get qos_ibw)" -lt 409600 ] && \
-		[ "$(nvram get qos_obw)" -lt 409600 ] && \
+		[ "$(printf "%.0f" "$(nvram get qos_ibw)")" -lt 409600 ] && \
+		[ "$(printf "%.0f" "$(nvram get qos_obw)")" -lt 409600 ] && \
 		[ "$(nvram get fc_disable)" = "0" ] && \
 		[ -n "${iptables_rules}" ] && \
 		[ "${fccontrol}" = "2" ]
@@ -1730,7 +1732,7 @@ startup() {
 				cp -f "/tmp/${SCRIPTNAME}_tcrules" "/tmp/${SCRIPTNAME}_tcrules.err"
 				logmsg "ERROR! Check /tmp/${SCRIPTNAME}_tcrules.log"
 			else
-				rm "/tmp/${SCRIPTNAME}_tmp_tcfilterdown" "/tmp/${SCRIPTNAME}_tmp_tcfilterup" "/tmp/${SCRIPTNAME}_tcrules.log" "/tmp/${SCRIPTNAME}_checktcrules" "/tmp/${SCRIPTNAME}_tcrules.err" 2>/dev/null
+				rm "/tmp/${SCRIPTNAME}_tmp_tcfilterdown" "/tmp/${SCRIPTNAME}_tmp_tcfilterup" "/tmp/${SCRIPTNAME}_tcrules.log" "/tmp/${SCRIPTNAME}_checktcrules" "/tmp/${SCRIPTNAME}_tcrules.err" "/tmp/${SCRIPTNAME}_tcrules" 2>/dev/null
 			fi
 		fi
 

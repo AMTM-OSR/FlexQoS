@@ -1,6 +1,6 @@
 # FlexQoS - Flexible QoS Enhancement Script for Adaptive QoS on ASUSWRT-Merlin
 
-![Shellcheck](https://github.com/dave14305/FlexQoS/actions/workflows/shellcheck.yml/badge.svg)
+![Shellcheck](https://github.com/AMTM-OSR/FlexQoS/actions/workflows/shellcheck.yml/badge.svg)
 
 This script has been tested on ASUS RT-AC86U, running ASUSWRT-Merlin 386.7_2, using Adaptive QoS with Manual Bandwidth Settings
 
@@ -28,7 +28,7 @@ FlexQoS requires ASUSWRT-Merlin version 384.15 or higher.
 In your SSH Client:
 
 ```Shell
-/usr/sbin/curl "https://raw.githubusercontent.com/dave14305/FlexQoS/master/flexqos.sh" -o /jffs/addons/flexqos/flexqos.sh --create-dirs && chmod +x /jffs/addons/flexqos/flexqos.sh && sh /jffs/addons/flexqos/flexqos.sh -install
+/usr/sbin/curl "https://raw.githubusercontent.com/AMTM-OSR/FlexQoS/master/flexqos.sh" -o /jffs/addons/flexqos/flexqos.sh --create-dirs && chmod +x /jffs/addons/flexqos/flexqos.sh && sh /jffs/addons/flexqos/flexqos.sh -install
 ```
 
 If you are reinstalling FlexQoS and a previous backup file is found at ```/jffs/addons/flexqos/restore_flexqos_settings.sh``` you will be prompted to restore the previous settings.

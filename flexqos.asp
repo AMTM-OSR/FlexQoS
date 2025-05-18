@@ -1,7 +1,7 @@
 ﻿<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <!--
 FlexQoS v1.3.1 released 2022-03-15
-FlexQoS maintained by dave14305
+FlexQoS maintained by AMTM-OSR
 Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -22,12 +22,12 @@ Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/
 <script type="text/javascript" src="/js/jquery.js"></script>
 <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js" integrity="sha256-t9UJPrESBeG2ojKTIcFLPGF7nHi2vEc7f5A2KpH/UBU=" crossorigin="anonymous"></script>
 <script type="text/javascript" src="/state.js"></script>
+<script type="text/javascript" src="/js/httpApi.js"></script>
 <script type="text/javascript" src="/help.js"></script>
 <script type="text/javascript" src="/general.js"></script>
 <script type="text/javascript" src="/popup.js"></script>
 <script type="text/javascript" src="/client_function.js"></script>
 <script type="text/javascript" src="/validator.js"></script>
-<script type="text/javascript" src="/js/httpApi.js"></script>
 <script type="text/javascript" src="/js/table/table.js"></script>
 <script type="text/javascript" src="/ext/flexqos/flexqos_arrays.js"></script>
 <style>
@@ -2436,8 +2436,8 @@ function check_bandwidth() {
 		urptot += parseInt(urp.value);
 		if ( qos_bwmode == 1 ) {
 			// Manual
-			dp_desc.innerText=(drp.value*qos_dlbw/100/(qos_dlbw>999 ? 1024 : 1)).toLocaleFixed(2) + " ~ " + (dcp.value*qos_dlbw/100/(qos_dlbw>999 ? 1024 : 1)).toLocaleFixed(2) + (qos_dlbw > 999 ? " Mb/s" : " Kb/s");
-			up_desc.innerText=(urp.value*qos_ulbw/100/(qos_ulbw>999 ? 1024 : 1)).toLocaleFixed(2) + " ~ " + (ucp.value*qos_ulbw/100/(qos_ulbw>999 ? 1024 : 1)).toLocaleFixed(2) + (qos_ulbw > 999 ? " Mb/s" : " Kb/s");
+			dp_desc.innerText=(drp.value*qos_dlbw/100/(qos_dlbw>999 ? 1000 : 1)).toLocaleFixed(2) + " ~ " + (dcp.value*qos_dlbw/100/(qos_dlbw>999 ? 1000 : 1)).toLocaleFixed(2) + (qos_dlbw > 999 ? " Mb/s" : " Kb/s");
+			up_desc.innerText=(urp.value*qos_ulbw/100/(qos_ulbw>999 ? 1000 : 1)).toLocaleFixed(2) + " ~ " + (ucp.value*qos_ulbw/100/(qos_ulbw>999 ? 1000 : 1)).toLocaleFixed(2) + (qos_ulbw > 999 ? " Mb/s" : " Kb/s");
 		} else {
 			// Auto
 			dp_desc.innerText="Automatic BW mode";
