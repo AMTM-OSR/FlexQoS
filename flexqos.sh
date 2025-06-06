@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.6
-release=2025-05-18
+version=1.4.7
+release=2025-06-05
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -1074,6 +1074,10 @@ update() {
 			Green " No Changes have been made"
 			return 0
 		fi
+	fi
+	if ! Firmware_Check; then
+		PressEnter
+		exit 5
 	fi
 	printf "Installing: %s...\n\n" "${SCRIPTNAME_DISPLAY}"
 	download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"
