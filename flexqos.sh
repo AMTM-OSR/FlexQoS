@@ -42,6 +42,7 @@ readonly ADDON_DIR="/jffs/addons/${SCRIPTNAME}"
 readonly WEBUIPATH="${ADDON_DIR}/${SCRIPTNAME}.asp"
 readonly SCRIPTPATH="${ADDON_DIR}/${SCRIPTNAME}.sh"
 readonly LOCKFILE="/tmp/addonwebui.lock"
+# shellcheck disable=SC2155
 readonly fwInstalledBaseVers="$(nvram get firmver | sed 's/\.//g')"
 readonly fwInstalledBuildVers="$(nvram get buildno)"
 readonly fwInstalledExtendNum="$(nvram get extendno)"
