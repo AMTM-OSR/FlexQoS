@@ -44,7 +44,9 @@ readonly SCRIPTPATH="${ADDON_DIR}/${SCRIPTNAME}.sh"
 readonly LOCKFILE="/tmp/addonwebui.lock"
 # shellcheck disable=SC2155
 readonly fwInstalledBaseVers="$(nvram get firmver | sed 's/\.//g')"
+# shellcheck disable=SC2155
 readonly fwInstalledBuildVers="$(nvram get buildno)"
+# shellcheck disable=SC2155
 readonly fwInstalledExtendNum="$(nvram get extendno)"
 IPv6_enabled="$(nvram get ipv6_service)"
 
