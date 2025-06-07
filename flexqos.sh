@@ -42,6 +42,9 @@ readonly ADDON_DIR="/jffs/addons/${SCRIPTNAME}"
 readonly WEBUIPATH="${ADDON_DIR}/${SCRIPTNAME}.asp"
 readonly SCRIPTPATH="${ADDON_DIR}/${SCRIPTNAME}.sh"
 readonly LOCKFILE="/tmp/addonwebui.lock"
+readonly fwInstalledBaseVers="$(nvram get firmver | sed 's/\.//g')"
+readonly fwInstalledBuildVers="$(nvram get buildno)"
+readonly fwInstalledExtendNum="$(nvram get extendno)"
 IPv6_enabled="$(nvram get ipv6_service)"
 
 # Update version number in custom_settings.txt for reading in WebUI
@@ -569,7 +572,7 @@ debug() {
 	scriptinfo
 	printf "Debug date      : %s\n" "$(date +'%Y-%m-%d %H:%M:%S%z')"
 	printf "Router Model    : %s\n" "${RMODEL}"
-	printf "Firmware Ver    : %s_%s\n" "$(nvram get buildno)" "$(nvram get extendno)"
+	printf "Firmware Ver    : %s_%s\n" "$fwInstalledBuildVers" "$fwInstalledExtendNum"
 	printf "DPI/Sig Ver     : %s / %s\n" "$(nvram get bwdpi_dpi_ver)" "$(nvram get bwdpi_sig_ver)"
 	get_config
 	set_tc_variables
@@ -1116,6 +1119,20 @@ menu() {
 	clear
 	sed -n '2,10p' "${0}"		# display banner
 	scriptinfo
+	if [ -f "/tmp/${SCRIPTNAME}_qos_failed" ]; then
+		if [ "$fwInstalledBaseVers" -eq 3006 ]
+		then
+			Yellow "Adaptive QoS is not functioning correctly on BE series routers"
+			Yellow "due to a known Asus/Trend Micro issue. Once Asus resolves this,"
+			Yellow "FlexQoS should work as expected."
+			printf "\n"
+		else
+			Yellow "Adaptive QoS appears to be malfunctioning."
+			Yellow "FlexQoS cannot apply its rules while the underlying QoS issue persists."
+			Yellow "Please investigate your router’s QoS settings before relying on FlexQoS."
+			printf "\n"
+		fi
+	fi
 	printf "  (1) about        explain functionality\n"
 	printf "  (2) update       check for updates\n"
 	printf "  (3) debug        traffic control parameters\n"
@@ -1717,11 +1734,13 @@ startup() {
 				logmsg "TC Modification Delay reached maximum 180 seconds again. Canceling startup!"
 				rm "/tmp/${SCRIPTNAME}_restartonce" 2>/dev/null
 			fi
+			touch "/tmp/${SCRIPTNAME}_qos_failed"
 			return 1
 		else
 			sleepdelay=$((sleepdelay+10))
 		fi
 	done
+	rm -f "/tmp/${SCRIPTNAME}_qos_failed"
 	[ "${sleepdelay}" -gt "0" ] && logmsg "TC Modification delayed for ${sleepdelay} seconds"
 	rm "/tmp/${SCRIPTNAME}_restartonce" 2>/dev/null
 
