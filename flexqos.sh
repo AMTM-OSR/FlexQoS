@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.6
-release=2025-05-18
+version=1.4.7
+release=2025-06-05
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -31,7 +31,12 @@ fi
 # Global variables
 readonly SCRIPTNAME_DISPLAY="FlexQoS"
 readonly SCRIPTNAME="flexqos"
-readonly GIT_URL="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}/master"
+readonly GIT_REPO="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}"
+GIT_BRANCH="$(am_settings_get "${SCRIPTNAME}_branch")"
+if [ -z "${GIT_BRANCH}" ]; then
+	GIT_BRANCH="master"
+fi
+GIT_URL="${GIT_REPO}/${GIT_BRANCH}"
 
 readonly ADDON_DIR="/jffs/addons/${SCRIPTNAME}"
 readonly WEBUIPATH="${ADDON_DIR}/${SCRIPTNAME}.asp"
@@ -551,6 +556,9 @@ scriptinfo() {
 	[ "${mode}" = "interactive" ] || return
 	printf "\n"
 	Green "${SCRIPTNAME_DISPLAY} v${version} released ${release}"
+	if [ "${GIT_BRANCH}" != "master" ]; then
+		Yellow " Development channel"
+	fi
 	printf "\n"
 } # scriptinfo
 
@@ -1067,6 +1075,10 @@ update() {
 			return 0
 		fi
 	fi
+	if ! Firmware_Check; then
+		PressEnter
+		exit 5
+	fi
 	printf "Installing: %s...\n\n" "${SCRIPTNAME_DISPLAY}"
 	download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"
 	exec sh "${SCRIPTPATH}" -install "${1}"
@@ -1472,10 +1484,6 @@ EOF
 	if [ -z "${fccontrol}" ]; then
 		fccontrol="0" # default to Off from GUI
 	fi
-	# Delete obsolete setting
-	if [ -n "$(am_settings_get "${SCRIPTNAME}"_branch)" ]; then
-		sed -i "/^${SCRIPTNAME}_branch /d" /jffs/addons/custom_settings.txt
-	fi
 } # get_config
 
 validate_iptables_rules() {
@@ -1759,6 +1767,8 @@ Available commands:
   ${SCRIPTNAME} -disable            disable   script but do not delete from disk
   ${SCRIPTNAME} -backup             backup user settings
   ${SCRIPTNAME} -debug              print debug info
+  ${SCRIPTNAME} -develop            switch to development channel
+  ${SCRIPTNAME} -stable             switch to stable channel
   ${SCRIPTNAME} -menu               interactive main menu
 
 EOF
@@ -1900,6 +1910,24 @@ case "${arg1}" in
 		;;
 	update*)		# updatecheck, updatesilent, or plain update
 		update "${arg1#update}"		# strip 'update' from arg1 to pass to update function
+		;;
+	'develop')
+		if [ "$(am_settings_get "${SCRIPTNAME}_branch")" = "develop" ]; then
+			printf "Already set to development branch.\n"
+		else
+			am_settings_set "${SCRIPTNAME}_branch" "develop"
+			printf "Set to development branch. Triggering update...\n"
+			exec "${0}" updatesilent
+		fi
+		;;
+	'stable')
+		if [ -z "$(am_settings_get "${SCRIPTNAME}_branch")" ]; then
+			printf "Already set to stable branch.\n"
+		else
+			sed -i "/^${SCRIPTNAME}_branch /d" /jffs/addons/custom_settings.txt
+			printf "Set to stable branch. Triggering update...\n"
+			exec "${0}" updatesilent
+		fi
 		;;
 	'menu'|'')
 		menu
