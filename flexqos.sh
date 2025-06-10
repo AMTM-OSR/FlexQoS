@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.6
-release=2025-05-18
+version=1.4.7
+release=2025-06-05
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -31,12 +31,23 @@ fi
 # Global variables
 readonly SCRIPTNAME_DISPLAY="FlexQoS"
 readonly SCRIPTNAME="flexqos"
-readonly GIT_URL="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}/master"
+readonly GIT_REPO="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}"
+GIT_BRANCH="$(am_settings_get "${SCRIPTNAME}_branch")"
+if [ -z "${GIT_BRANCH}" ]; then
+	GIT_BRANCH="master"
+fi
+GIT_URL="${GIT_REPO}/${GIT_BRANCH}"
 
 readonly ADDON_DIR="/jffs/addons/${SCRIPTNAME}"
 readonly WEBUIPATH="${ADDON_DIR}/${SCRIPTNAME}.asp"
 readonly SCRIPTPATH="${ADDON_DIR}/${SCRIPTNAME}.sh"
 readonly LOCKFILE="/tmp/addonwebui.lock"
+# shellcheck disable=SC2155
+readonly fwInstalledBaseVers="$(nvram get firmver | sed 's/\.//g')"
+# shellcheck disable=SC2155
+readonly fwInstalledBuildVers="$(nvram get buildno)"
+# shellcheck disable=SC2155
+readonly fwInstalledExtendNum="$(nvram get extendno)"
 IPv6_enabled="$(nvram get ipv6_service)"
 
 # Update version number in custom_settings.txt for reading in WebUI
@@ -551,6 +562,9 @@ scriptinfo() {
 	[ "${mode}" = "interactive" ] || return
 	printf "\n"
 	Green "${SCRIPTNAME_DISPLAY} v${version} released ${release}"
+	if [ "${GIT_BRANCH}" != "master" ]; then
+		Yellow " Development channel"
+	fi
 	printf "\n"
 } # scriptinfo
 
@@ -561,7 +575,7 @@ debug() {
 	scriptinfo
 	printf "Debug date      : %s\n" "$(date +'%Y-%m-%d %H:%M:%S%z')"
 	printf "Router Model    : %s\n" "${RMODEL}"
-	printf "Firmware Ver    : %s_%s\n" "$(nvram get buildno)" "$(nvram get extendno)"
+	printf "Firmware Ver    : %s_%s\n" "$fwInstalledBuildVers" "$fwInstalledExtendNum"
 	printf "DPI/Sig Ver     : %s / %s\n" "$(nvram get bwdpi_dpi_ver)" "$(nvram get bwdpi_sig_ver)"
 	get_config
 	set_tc_variables
@@ -1067,6 +1081,10 @@ update() {
 			return 0
 		fi
 	fi
+	if ! Firmware_Check; then
+		PressEnter
+		exit 5
+	fi
 	printf "Installing: %s...\n\n" "${SCRIPTNAME_DISPLAY}"
 	download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"
 	exec sh "${SCRIPTPATH}" -install "${1}"
@@ -1104,6 +1122,20 @@ menu() {
 	clear
 	sed -n '2,10p' "${0}"		# display banner
 	scriptinfo
+	if [ -f "/tmp/${SCRIPTNAME}_qos_failed" ]; then
+		if [ "$fwInstalledBaseVers" -eq 3006 ]
+		then
+			Yellow "Adaptive QoS is not functioning correctly on BE series routers"
+			Yellow "due to a known Asus/Trend Micro issue. Once Asus resolves this,"
+			Yellow "FlexQoS should work as expected."
+			printf "\n"
+		else
+			Yellow "Adaptive QoS appears to be malfunctioning."
+			Yellow "FlexQoS cannot apply its rules while the underlying QoS issue persists."
+			Yellow "Please investigate your router’s QoS settings before relying on FlexQoS."
+			printf "\n"
+		fi
+	fi
 	printf "  (1) about        explain functionality\n"
 	printf "  (2) update       check for updates\n"
 	printf "  (3) debug        traffic control parameters\n"
@@ -1472,10 +1504,6 @@ EOF
 	if [ -z "${fccontrol}" ]; then
 		fccontrol="0" # default to Off from GUI
 	fi
-	# Delete obsolete setting
-	if [ -n "$(am_settings_get "${SCRIPTNAME}"_branch)" ]; then
-		sed -i "/^${SCRIPTNAME}_branch /d" /jffs/addons/custom_settings.txt
-	fi
 } # get_config
 
 validate_iptables_rules() {
@@ -1709,11 +1737,13 @@ startup() {
 				logmsg "TC Modification Delay reached maximum 180 seconds again. Canceling startup!"
 				rm "/tmp/${SCRIPTNAME}_restartonce" 2>/dev/null
 			fi
+			touch "/tmp/${SCRIPTNAME}_qos_failed"
 			return 1
 		else
 			sleepdelay=$((sleepdelay+10))
 		fi
 	done
+	rm -f "/tmp/${SCRIPTNAME}_qos_failed"
 	[ "${sleepdelay}" -gt "0" ] && logmsg "TC Modification delayed for ${sleepdelay} seconds"
 	rm "/tmp/${SCRIPTNAME}_restartonce" 2>/dev/null
 
@@ -1759,6 +1789,8 @@ Available commands:
   ${SCRIPTNAME} -disable            disable   script but do not delete from disk
   ${SCRIPTNAME} -backup             backup user settings
   ${SCRIPTNAME} -debug              print debug info
+  ${SCRIPTNAME} -develop            switch to development channel
+  ${SCRIPTNAME} -stable             switch to stable channel
   ${SCRIPTNAME} -menu               interactive main menu
 
 EOF
@@ -1900,6 +1932,24 @@ case "${arg1}" in
 		;;
 	update*)		# updatecheck, updatesilent, or plain update
 		update "${arg1#update}"		# strip 'update' from arg1 to pass to update function
+		;;
+	'develop')
+		if [ "$(am_settings_get "${SCRIPTNAME}_branch")" = "develop" ]; then
+			printf "Already set to development branch.\n"
+		else
+			am_settings_set "${SCRIPTNAME}_branch" "develop"
+			printf "Set to development branch. Triggering update...\n"
+			exec "${0}" updatesilent
+		fi
+		;;
+	'stable')
+		if [ -z "$(am_settings_get "${SCRIPTNAME}_branch")" ]; then
+			printf "Already set to stable branch.\n"
+		else
+			sed -i "/^${SCRIPTNAME}_branch /d" /jffs/addons/custom_settings.txt
+			printf "Set to stable branch. Triggering update...\n"
+			exec "${0}" updatesilent
+		fi
 		;;
 	'menu'|'')
 		menu
