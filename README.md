@@ -1,7 +1,5 @@
 # FlexQoS - Flexible QoS Enhancement Script for Adaptive QoS on ASUSWRT-Merlin
 
-![Shellcheck](https://github.com/AMTM-OSR/FlexQoS/actions/workflows/shellcheck.yml/badge.svg)
-
 This script has been tested on ASUS RT-AC86U, running ASUSWRT-Merlin 386.7_2, using Adaptive QoS with Manual Bandwidth Settings
 
 ## Quick Overview:
