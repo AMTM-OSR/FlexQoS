@@ -70,7 +70,7 @@ jobs:
       # 4--- Update SCRIPT_BRANCH only
       - name: Update Script.sh Script Branch
         run: |
-          sed -Ei '/^[[:space:]]*GIT_BRANCH="[^"]+"$/s|^.*$|    GIT_BRANCH="master"|' flexqos.sh
+          sed -Ei 's|^([[:space:]]*GIT_BRANCH=")([^"]+)(")$|\1master\3|' flexqos.sh
 
       # 5--- Commit branch change only if the file was actually modified
       - name: Commit branch change
