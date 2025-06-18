@@ -34,7 +34,7 @@ readonly SCRIPTNAME="flexqos"
 readonly GIT_REPO="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}"
 GIT_BRANCH="$(am_settings_get "${SCRIPTNAME}_branch")"
 if [ -z "${GIT_BRANCH}" ]; then
-	GIT_BRANCH="master"
+	GIT_BRANCH="develop"
 fi
 GIT_URL="${GIT_REPO}/${GIT_BRANCH}"
 
