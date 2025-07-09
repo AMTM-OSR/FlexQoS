@@ -1344,6 +1344,13 @@ Firmware_Check() {
 		printf "\nInstall FreshJR_QOS via amtm as an alternative for your firmware version.\n"
 		return 1
 	fi
+    # ── Block Wi-Fi 7 devices (not supported) ──────────────────────────────────
+    # Any hit on the token “wifi7” in rc_support means the router is 802.11be.
+    if nvram get rc_support | grep -q -w wifi7; then
+        Red "Wi-Fi 7 (802.11be) devices are not supported by ${SCRIPTNAME_DISPLAY}. Installation aborted."
+        printf "\nThis add-on currently supports Wi-Fi 6/6E and earlier models only.\n"
+        return 1
+    fi
 	if [ "$(nvram get qos_enable)" != "1" ] || [ "$(nvram get qos_type)" != "1" ]; then
 		Red "Adaptive QoS is not enabled. Please enable it in the GUI. Aborting installation."
 		return 1
