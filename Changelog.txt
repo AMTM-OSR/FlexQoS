@@ -4,10 +4,8 @@ v1.4.8 (18-May-2025)
 
 v1.4.7 (15-June-2025)
   - CHANGED: Re-enable develop branch for script development.
-  - CHANGED: Allow script to remain in failed update process as reported by @maghuro here: Improvement regarding update #1
-    Previously the script would uninstall itself in a failed update.
-  - CHANGED: Added warning for users installing on 3006 routers without functioning QoS in PR: Add Warning Messages for Adaptive QoS #8
-    Warnings may take anywhere from 15 seconds to 3 minutes after install to display. Example screenshots below:
+  - CHANGED: Allow script to remain in failed update process as reported by @maghuro
+  - CHANGED: Added warning for users installing on 3006 routers without functioning QoS
 
 v1.4.6 (18-May-2025)
   - CHANGED: Moved FlexQoS under AMTM-OSR organization for orphaned scripts
