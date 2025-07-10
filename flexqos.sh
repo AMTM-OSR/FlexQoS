@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.7
-release=2025-06-05
+version=1.4.8
+release=2025-07-10
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -34,7 +34,7 @@ readonly SCRIPTNAME="flexqos"
 readonly GIT_REPO="https://raw.githubusercontent.com/AMTM-OSR/${SCRIPTNAME_DISPLAY}"
 GIT_BRANCH="$(am_settings_get "${SCRIPTNAME}_branch")"
 if [ -z "${GIT_BRANCH}" ]; then
-	GIT_BRANCH="master"
+	GIT_BRANCH="develop"
 fi
 GIT_URL="${GIT_REPO}/${GIT_BRANCH}"
 
@@ -1122,20 +1122,6 @@ menu() {
 	clear
 	sed -n '2,10p' "${0}"		# display banner
 	scriptinfo
-	if [ -f "/tmp/${SCRIPTNAME}_qos_failed" ]; then
-		if [ "$fwInstalledBaseVers" -eq 3006 ]
-		then
-			Yellow "Adaptive QoS is not functioning correctly on BE series routers"
-			Yellow "due to a known Asus/Trend Micro issue. Once Asus resolves this,"
-			Yellow "FlexQoS should work as expected."
-			printf "\n"
-		else
-			Yellow "Adaptive QoS appears to be malfunctioning."
-			Yellow "FlexQoS cannot apply its rules while the underlying QoS issue persists."
-			Yellow "Please investigate your router’s QoS settings before relying on FlexQoS."
-			printf "\n"
-		fi
-	fi
 	printf "  (1) about        explain functionality\n"
 	printf "  (2) update       check for updates\n"
 	printf "  (3) debug        traffic control parameters\n"
@@ -1358,6 +1344,13 @@ Firmware_Check() {
 		printf "\nInstall FreshJR_QOS via amtm as an alternative for your firmware version.\n"
 		return 1
 	fi
+	# ── Block Wi-Fi 7 devices (not supported) ──────────────────────────────────
+	# Any hit on the token “wifi7” in rc_support means the router is 802.11be.
+	if nvram get rc_support | grep -q -w wifi7; then
+		Red "Wi-Fi 7 (802.11be) devices are not supported by ${SCRIPTNAME_DISPLAY}. Installation aborted."
+		printf "\nThis add-on currently supports Wi-Fi 6/6E and earlier models only.\n"
+		return 1
+	fi
 	if [ "$(nvram get qos_enable)" != "1" ] || [ "$(nvram get qos_type)" != "1" ]; then
 		Red "Adaptive QoS is not enabled. Please enable it in the GUI. Aborting installation."
 		return 1
@@ -1421,6 +1414,7 @@ install() {
 
 uninstall() {
 	local yn
+	local force="$1"    # Pass “force” (or “-f”) to run non-interactively
 	printf "Removing entries from Merlin user scripts...\n"
 	sed -i "\~${SCRIPTNAME_DISPLAY}~d" /jffs/scripts/firewall-start 2>/dev/null
 	sed -i "\~${SCRIPTNAME_DISPLAY}~d" /jffs/scripts/service-event-end 2>/dev/null
@@ -1431,19 +1425,26 @@ uninstall() {
 	cru d "${SCRIPTNAME}_5min" 2>/dev/null
 	remove_webui
 	printf "Removing %s settings...\n" "${SCRIPTNAME_DISPLAY}"
-	if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
-		printf "Backup found! Would you like to keep it? [1=Yes 2=No]: "
-		read -r yn
-		if [ "${yn}" = "2" ]; then
-			printf "Deleting Backup...\n"
-			rm "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
-		fi
+	if [ "${force}" = "force" ] || [ "${force}" = "-f" ]; then
+		# Non-interactive mode #
+		# No backup and existing backups are deleted for a clean removal #
+		rm -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" 2>/dev/null
 	else
-		printf "Do you want to backup your settings before uninstall? [1=Yes 2=No]: "
-		read -r yn
-		if [ "${yn}" = "1" ]; then
-			printf "Backing up %s settings...\n" "${SCRIPTNAME_DISPLAY}"
-			backup create force
+		# Original interactive prompts #
+		if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
+			printf "Backup found! Would you like to keep it? [1=Yes 2=No]: "
+			read -r yn
+			if [ "${yn}" = "2" ]; then
+				printf "Deleting Backup...\n"
+				rm "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
+			fi
+		else
+			printf "Do you want to backup your settings before uninstall? [1=Yes 2=No]: "
+			read -r yn
+			if [ "${yn}" = "1" ]; then
+				printf "Backing up %s settings...\n" "${SCRIPTNAME_DISPLAY}"
+				backup create force
+			fi
 		fi
 	fi
 	sed -i "/^${SCRIPTNAME}_/d" /jffs/addons/custom_settings.txt
@@ -1674,6 +1675,13 @@ schedule_check_job() {
 
 startup() {
 	local sleepdelay
+	#  auto-remove on unsupported Wi-Fi 7 firmware for firmware upgrades betweem 3004 and 3006
+	if nvram get rc_support | grep -q -w wifi7
+	then
+		logmsg "Wi-Fi 7 router detected – ${SCRIPTNAME_DISPLAY} is unsupported. Initiating automatic uninstall."
+		uninstall force
+		return 1        # Abort the rest of startup
+	fi
 	if [ "$(nvram get qos_enable)" != "1" ] || [ "$(nvram get qos_type)" != "1" ]; then
 		logmsg "Adaptive QoS is not enabled. Skipping ${SCRIPTNAME_DISPLAY} startup."
 		return 1
@@ -1737,13 +1745,11 @@ startup() {
 				logmsg "TC Modification Delay reached maximum 180 seconds again. Canceling startup!"
 				rm "/tmp/${SCRIPTNAME}_restartonce" 2>/dev/null
 			fi
-			touch "/tmp/${SCRIPTNAME}_qos_failed"
 			return 1
 		else
 			sleepdelay=$((sleepdelay+10))
 		fi
 	done
-	rm -f "/tmp/${SCRIPTNAME}_qos_failed"
 	[ "${sleepdelay}" -gt "0" ] && logmsg "TC Modification delayed for ${sleepdelay} seconds"
 	rm "/tmp/${SCRIPTNAME}_restartonce" 2>/dev/null
 

@@ -1185,7 +1185,6 @@ function get_data() {
 		success: function(response) {
 			redraw();
 			draw_conntrack_table();
-			check_bandwidth_flow();
 			timedEvent = setTimeout("get_data();", refreshRate * 1000);
 		}
 	});
@@ -1297,56 +1296,6 @@ function initialize_charts() {
 	});
 	line_obj_ul=line_obj;		// actually draws the chart on the page
 } // initialize_charts
-
-function getFwBase () {
-    /*  "3.0.0.6"  →  3006  */
-    const ver = document.getElementById('firmver')?.value || '';
-    return parseInt(ver.replace(/\./g, ''), 10);     // NaN if blank
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-    const fwBase = getFwBase();
-
-    const noflowMsg = (fwBase === 3006)
-        ? 'Adaptive&nbsp;QoS is not functioning correctly on '
-          + 'BE-series routers due to a known ASUS&nbsp;/&nbsp;Trend&nbsp;Micro issue. '
-          + 'Once ASUS resolves this, FlexQoS should work as expected.'
-        : 'Adaptive&nbsp;QoS appears to be malfunctioning. '
-          + 'FlexQoS cannot apply its rules while the underlying QoS system is malfunctioning.';
-
-    const span = document.getElementById('noflow_msg');
-    if (span) span.innerHTML = noflowMsg;
-});
-
-/* consider anything below this many *kilobits* per second “idle” */
-const NOFLOW_CUTOFF_KBPS = 1;      // feel free to raise/lower
-const NOFLOW_THRESHOLD   = 5;     // 5 × 3s refresh about 15 seconds
-
-let noFlowCounter = 0;
-
-function kbpsFromRateString(str) {
-    if (!str) return 0;
-    if (str.includes("Mbit"))  return parseFloat(str) * 1000;
-    if (str.includes("Kbit"))  return parseFloat(str);
-    return parseFloat(str) / 1000;
-}
-
-function check_bandwidth_flow () {
-    let dlRate = 0, ulRate = 0;
-
-    for (const e of tcdata_lan_array) dlRate += kbpsFromRateString(e[2]);
-    for (const e of tcdata_wan_array) ulRate += kbpsFromRateString(e[2]);
-
-    if (dlRate < NOFLOW_CUTOFF_KBPS && ulRate < NOFLOW_CUTOFF_KBPS) {
-        noFlowCounter++;
-    } else {
-        noFlowCounter = 0;
-    }
-
-    const warn = document.getElementById('noflow_notice');
-    warn.style.display = (noFlowCounter >= NOFLOW_THRESHOLD) ? 'block'
-                                                             : 'none';
-}
 
 function change_chart_scale(input) {
 	var chart_scale = cookie.get('flexqos_rate_graph_scale');
@@ -2794,7 +2743,7 @@ function DelCookie(cookiename){
 <iframe name="hidden_frame" id="hidden_frame" width="0" height="0" frameborder="0"></iframe>
 <form method="post" name="form" action="/start_apply.htm" target="hidden_frame">
 <input type="hidden" name="preferred_lang" id="preferred_lang" value="<% nvram_get(" preferred_lang "); %>">
-<input type="hidden" name="firmver" id="firmver" value="<% nvram_get(" firmver "); %>">
+<input type="hidden" name="firmver" value="<% nvram_get(" firmver "); %>">
 <input type="hidden" name="current_page" value="">
 <input type="hidden" name="next_page" value="">
 <input type="hidden" name="action_mode" value="apply">
@@ -2976,11 +2925,6 @@ function DelCookie(cookiename){
 </table>
 <br>
 <div id="no_aqos_notice" style="display:none;font-size:125%;color:#FFCC00;">Note: Adaptive QoS is not enabled.</div>
-<div id="noflow_notice"
-     style="display:none;font-size:125%;color:#FFCC00;">
-    No bandwidth flow detected.
-    <span id="noflow_msg"></span>
-</div>
 <table>
 <tr id="dl_tr">
 <td style="padding-right:10px;font-size:125%;color:#FFCC00;">
