@@ -1414,6 +1414,7 @@ install() {
 
 uninstall() {
 	local yn
+	local force="$1"    # Pass “force” (or “-f”) to run non-interactively
 	printf "Removing entries from Merlin user scripts...\n"
 	sed -i "\~${SCRIPTNAME_DISPLAY}~d" /jffs/scripts/firewall-start 2>/dev/null
 	sed -i "\~${SCRIPTNAME_DISPLAY}~d" /jffs/scripts/service-event-end 2>/dev/null
@@ -1424,19 +1425,26 @@ uninstall() {
 	cru d "${SCRIPTNAME}_5min" 2>/dev/null
 	remove_webui
 	printf "Removing %s settings...\n" "${SCRIPTNAME_DISPLAY}"
-	if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
-		printf "Backup found! Would you like to keep it? [1=Yes 2=No]: "
-		read -r yn
-		if [ "${yn}" = "2" ]; then
-			printf "Deleting Backup...\n"
-			rm "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
-		fi
+	if [ "${force}" = "force" ] || [ "${force}" = "-f" ]; then
+		# Non-interactive mode #
+		# No backup and existing backups are deleted for a clean removal #
+		rm -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" 2>/dev/null
 	else
-		printf "Do you want to backup your settings before uninstall? [1=Yes 2=No]: "
-		read -r yn
-		if [ "${yn}" = "1" ]; then
-			printf "Backing up %s settings...\n" "${SCRIPTNAME_DISPLAY}"
-			backup create force
+		# Original interactive prompts #
+		if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
+			printf "Backup found! Would you like to keep it? [1=Yes 2=No]: "
+			read -r yn
+			if [ "${yn}" = "2" ]; then
+				printf "Deleting Backup...\n"
+				rm "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
+			fi
+		else
+			printf "Do you want to backup your settings before uninstall? [1=Yes 2=No]: "
+			read -r yn
+			if [ "${yn}" = "1" ]; then
+				printf "Backing up %s settings...\n" "${SCRIPTNAME_DISPLAY}"
+				backup create force
+			fi
 		fi
 	fi
 	sed -i "/^${SCRIPTNAME}_/d" /jffs/addons/custom_settings.txt
@@ -1667,6 +1675,13 @@ schedule_check_job() {
 
 startup() {
 	local sleepdelay
+	#  auto-remove on unsupported Wi-Fi 7 firmware for firmware upgrades betweem 3004 and 3006
+	if nvram get rc_support | grep -q -w wifi7
+	then
+		logmsg "Wi-Fi 7 router detected – ${SCRIPTNAME_DISPLAY} is unsupported. Initiating automatic uninstall."
+		uninstall force
+		return 1        # Abort the rest of startup
+	fi
 	if [ "$(nvram get qos_enable)" != "1" ] || [ "$(nvram get qos_type)" != "1" ]; then
 		logmsg "Adaptive QoS is not enabled. Skipping ${SCRIPTNAME_DISPLAY} startup."
 		return 1
