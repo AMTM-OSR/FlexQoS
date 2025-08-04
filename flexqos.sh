@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.8
-release=2025-07-10
+version=1.4.9
+release=2025-08-04
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -1091,6 +1091,45 @@ update() {
 	exit
 } # update
 
+qos_stop() {
+    # Stop Adaptive QoS cleanly
+    logmsg "Stopping Adaptive QoS…"
+    service stop_qos
+
+    commit=0
+    cur_enable="$(nvram get qos_enable 2>/dev/null)"
+    if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "0" ]; then
+        nvram set qos_enable=0
+        commit=1
+    fi
+
+    # Only commit if we changed something
+    [ "${commit}" = "1" ] && nvram commit
+    logmsg "Adaptive QoS stopped."
+}
+
+qos_start() {
+    # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
+    logmsg "Starting Adaptive QoS…"
+
+    commit=0
+    cur_type="$(nvram get qos_type 2>/dev/null)"
+    if [ -n "${cur_type}" ] && [ "${cur_type}" != "1" ]; then
+        nvram set qos_type=1
+        commit=1
+    fi
+
+    cur_enable="$(nvram get qos_enable 2>/dev/null)"
+    if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "1" ]; then
+        nvram set qos_enable=1
+        commit=1
+    fi
+
+    [ "${commit}" = "1" ] && nvram commit
+    service start_qos
+    logmsg "Adaptive QoS started."
+}
+
 prompt_restart() {
 	# Restart QoS so that FlexQoS changes can take effect.
 	# Possible values for $needrestart:
@@ -1122,14 +1161,20 @@ menu() {
 	clear
 	sed -n '2,10p' "${0}"		# display banner
 	scriptinfo
+    if [ "$(nvram get qos_enable)" = "1" ]; then
+        qos_action="stop"     # show “stop” if QoS is running
+    else
+        qos_action="start"    # show “start” if QoS is stopped
+    fi
 	printf "  (1) about        explain functionality\n"
 	printf "  (2) update       check for updates\n"
 	printf "  (3) debug        traffic control parameters\n"
-	printf "  (4) restart      restart QoS\n"
-	printf "  (5) backup       create settings backup\n"
+	printf "  (4) restart      restart QoS completely\n"
+	printf "  (5) %-12s %s QoS\n" "${qos_action}" "${qos_action}"
+	printf "  (6) backup       create settings backup\n"
 	if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
-		printf "  (6) restore      restore settings from backup\n"
-		printf "  (7) delete       remove backup\n"
+		printf "  (7) restore      restore settings from backup\n"
+		printf "  (8) delete       remove backup\n"
 	fi
 	printf "\n  (9) uninstall    uninstall script\n"
 	printf "  (e) exit\n"
@@ -1150,16 +1195,23 @@ menu() {
 			prompt_restart
 		;;
 		'5')
-			backup create
+			if [ "${qos_action}" = "stop" ]; then
+				qos_stop
+			else
+				qos_start
+			fi
 		;;
 		'6')
+			backup create
+		;;
+		'7')
 			if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
 				backup restore
 			else
 				Red "$input is not a valid option!"
 			fi
 		;;
-		'7')
+		'8')
 			if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
 				backup remove
 			else
@@ -1926,6 +1978,12 @@ case "${arg1}" in
 		sed -i "/${SCRIPTNAME}/d" /jffs/scripts/service-event-end  2>/dev/null
 		remove_webui
 		needrestart=2
+		;;
+	'qosstart')
+		qos_start
+		;;
+	'qosstop')
+		qos_stop
 		;;
 	'backup')
 		backup create force
