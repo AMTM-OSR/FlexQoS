@@ -1166,10 +1166,76 @@ prompt_restart() {
 
 QOS_CRON_OFF="${SCRIPTNAME}_qosoff"
 QOS_CRON_ON="${SCRIPTNAME}_qoson"
+SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
 
 # --- helpers ---------------------------------------------------------------
 _qs_trim() { printf "%s" "$1" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//' | tr -d '\r'; }
 _qs_to_dec() { printf "%s" "${1:-0}" | awk '{print $1+0}'; }
+_qs_hm() {
+    printf "%02d:%02d" "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"
+}
+
+_qs_settings_set() {
+    # args: enabled(0/1) dow sh sm eh em
+    local en dow sh sm eh em line
+    en="$1"; dow="$2"; sh="$3"; sm="$4"; eh="$5"; em="$6"
+    line="<${en}>${dow}>$(_qs_hm "$sh" "$sm")>$(_qs_hm "$eh" "$em")"
+    am_settings_set "${SCRIPTNAME}"_schedule "$line"
+    SCHEDULE="$line"
+}
+
+_qs_settings_delete() {
+    local file
+    file="/jffs/addons/custom_settings.txt"
+    if [ -f "$file" ]; then
+        # Remove any line that starts with "<script>_schedule "
+        sed -i -e "/^${SCRIPTNAME}_schedule[[:space:]]/d" "$file"
+    fi
+    SCHEDULE=""
+}
+
+_qs_parse_schedule_var() {
+    # in: $SCHEDULE like "<1>*|list|range>HH:MM>HH:MM"
+    # out (echo): en dow sh sm eh em
+    local s en rest dow st et out sh sm eh em
+    s="$(_qs_trim "$SCHEDULE")"
+    [ -n "$s" ] || return 1
+
+    # Validate format without using a `case` pattern (BusyBox ash can choke on < > here)
+    printf "%s" "$s" | grep -Eq '^<[01]>[^>]+>[0-2]?[0-9](:[0-5]?[0-9])?>[0-2]?[0-9](:[0-5]?[0-9])?$' || return 1
+
+    en="${s#<}"; en="${en%%>*}"
+    rest="${s#*>}"
+    dow="${rest%%>*}"
+    rest="${rest#*>}"
+    st="${rest%%>*}"
+    et="${rest#*>}"
+
+    [ "$en" = "1" ] || [ "$en" = "0" ] || return 1
+    _qs_valid_dow "$dow" || return 1
+
+    out="$(_qs_parse_time "$st")" || return 1
+    set -- $out; sh="$1"; sm="$2"
+    out="$(_qs_parse_time "$et")" || return 1
+    set -- $out; eh="$1"; em="$2"
+
+    printf "%s %s %s %s %s %s\n" "$en" "$dow" "$sh" "$sm" "$eh" "$em"
+}
+
+qos_schedule_apply_from_config() {
+    [ -n "$SCHEDULE" ] || SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
+    if out="$(_qs_parse_schedule_var)"; then
+        set -- $out
+        en="$1"; dow="$2"; sh="$3"; sm="$4"; eh="$5"; em="$6"
+        if [ "$en" = "1" ]; then
+            _qs_apply_jobs "$sh" "$sm" "$eh" "$em" "$dow"
+        else
+            _qs_clear_jobs
+        fi
+    else
+        _qs_clear_jobs
+    fi
+}
 
 _qs_parse_time() {
     local t h m
@@ -1235,12 +1301,18 @@ _qs_apply_jobs() {
 }
 
 _qs_show_current() {
-    local lines
+    local lines out en dow sh sm eh em
     lines="$(cru l | grep -E "#(${QOS_CRON_ON}|${QOS_CRON_OFF})#" || true)"
     if [ -z "$lines" ]; then
         printf "  (none)\n"
     else
         printf "%s\n" "$lines" | sed 's/^/  /'
+    fi
+    if [ -n "$SCHEDULE" ]; then
+        if out="$(_qs_parse_schedule_var)"; then
+            set -- $out
+            en="$1"; dow="$2"; sh="$3"; sm="$4"; eh="$5"; em="$6"
+        fi
     fi
 }
 
@@ -1271,37 +1343,35 @@ _qs_guided() {
         sel="$(_qs_prompt "Select DOW (1-3, or e=exit)" "")" || return 1
         case "$sel" in
             e|E|cancel|Cancel) return 1 ;;
-            1) dow="*"   ; break ;;
-            2) dow="1-5" ; break ;;
-            3) dow="0,6" ; break ;;
-            *) printf "Invalid selection.\n" >&2 ;;
+            1) dow="*" ;;
+            2) dow="1-5" ;;
+            3) dow="0,6" ;;
+            *) printf "Invalid selection.\n" >&2; continue ;;
         esac
+        break
     done
 
-    local st et sh sm eh em t
+    local out sh sm eh em t
     while :; do
       t="$(_qs_prompt "START time to ENABLE QoS" "07:00")" || return 1
-      if out="$(_qs_parse_time "$t")"; then
-        set -- $out; sh="$1"; sm="$2"
-        break
-      fi
+      if out="$(_qs_parse_time "$t")"; then set -- $out; sh="$1"; sm="$2"; break; fi
       printf "Invalid time. Use HH or HH:MM (00-23 for hours, 00-59 for minutes).\n" >&2
     done
 
-    # END time
     while :; do
       t="$(_qs_prompt "END time to DISABLE QoS" "20:00")" || return 1
-      if out="$(_qs_parse_time "$t")"; then
-        set -- $out; eh="$1"; em="$2"
-        break
-      fi
+      if out="$(_qs_parse_time "$t")"; then set -- $out; eh="$1"; em="$2"; break; fi
       printf "Invalid time. Use HH or HH:MM (00-23 for hours, 00-59 for minutes).\n" >&2
     done
 
-    printf "\nSummary:\n  ENABLE: %s:%s\n  DISABLE : %s:%s\n  Days   : %s\n" "$sh" "$sm" "$eh" "$em" "${dow}"
+    printf "\nSummary:\n  ENABLE: %s:%s\n  DISABLE: %s:%s\n  Days   : %s\n" "$sh" "$sm" "$eh" "$em" "${dow}"
     t="$(_qs_prompt "Apply this schedule? (y/n)" "y")" || return 1
     case "$t" in
-        y|Y) _qs_apply_jobs "$sh" "$sm" "$eh" "$em" "$dow"; printf "OK. Schedule applied.\n" >&2 ;;
+        y|Y)
+            _qs_apply_jobs "$sh" "$sm" "$eh" "$em" "$dow"
+            _qs_settings_set 1 "$dow" "$sh" "$sm" "$eh" "$em"
+            printf "OK. Schedule applied and saved.\n" >&2
+        ;;
         *)   printf "Canceled.\n" >&2; return 1 ;;
     esac
 }
@@ -1326,12 +1396,38 @@ _qs_custom() {
     _qs_clear_jobs
     cru a "${QOS_CRON_ON}"  "${on5}  ${SCRIPTPATH} -qosstart"
     cru a "${QOS_CRON_OFF}" "${off5} ${SCRIPTPATH} -qosstop"
-
     printf "OK. Custom entries applied.\n" >&2
-    return 0
+
+    # Persist to <en>dow>HH:MM>HH:MM if simple DOW-only with fixed HH:MM
+    local m1 h1 d1 mo1 w1 m2 h2 d2 mo2 w2 ok
+    set -- $on5;  m1="$1"; h1="$2"; d1="$3"; mo1="$4"; w1="$5"
+    set -- $off5; m2="$1"; h2="$2"; d2="$3"; mo2="$4"; w2="$5"
+    ok=1
+    echo "$m1" | grep -Eq '^[0-5]?[0-9]$' || ok=0
+    echo "$h1" | grep -Eq '^[0-2]?[0-9]$' || ok=0
+    echo "$m2" | grep -Eq '^[0-5]?[0-9]$' || ok=0
+    echo "$h2" | grep -Eq '^[0-2]?[0-9]$' || ok=0
+    [ "$d1"  = "*" ] || ok=0
+    [ "$mo1" = "*" ] || ok=0
+    [ "$d2"  = "*" ] || ok=0
+    [ "$mo2" = "*" ] || ok=0
+    [ "$w1" = "$w2" ] || ok=0
+    _qs_valid_dow "$w1" || ok=0
+
+    if [ "$ok" = "1" ]; then
+        m1="$(_qs_to_dec "$m1")"; h1="$(_qs_to_dec "$h1")"
+        m2="$(_qs_to_dec "$m2")"; h2="$(_qs_to_dec "$h2")"
+        _qs_settings_set 1 "$w1" "$(printf "%02d" "$h1")" "$(printf "%02d" "$m1")" "$(printf "%02d" "$h2")" "$(printf "%02d" "$m2")"
+    else
+        printf "Note: Custom expressions aren't DOW-only with fixed HH:MM; not persisted to settings file.\n" >&2
+    fi
 }
 
 qos_schedule_menu() {
+    # Ensure cron is rebuilt from saved settings as soon as the menu opens
+    SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
+    qos_schedule_apply_from_config
+
     while :; do
         printf "\n================ QoS Schedule =================\n"
         printf "Current QoS schedule (if any):\n"
@@ -1347,13 +1443,17 @@ qos_schedule_menu() {
         case "$sel" in
             1) _qs_guided ;;
             2) _qs_custom ;;
-            3) _qs_clear_jobs; printf "Schedule cleared.\n" ;;
+            3)
+               _qs_clear_jobs
+               _qs_settings_delete
+               qos_schedule_apply_from_config
+               printf "Schedule cleared.\n"
+            ;;
             e|E|exit|Exit) return ;;
             *) printf "Invalid selection.\n" ;;
         esac
     done
 }
-
 
 menu() {
 	# Minimal interactive, menu-driven interface for basic maintenance functions.

@@ -586,14 +586,54 @@ function schedRowHtml(win) {
   );
 }
 
+function parseDaysSpec(spec) {
+  if (typeof spec !== 'string') return [];
+  spec = spec.trim();
+  if (!spec) return [];
+  if (spec === '*') return [0,1,2,3,4,5,6];
+
+  var days = [];
+  var push = function(n){
+    if (n === 7) n = 0;                // 7 == Sunday
+    if (n >= 0 && n <= 6 && days.indexOf(n) < 0) days.push(n);
+  };
+
+  spec.split(',').forEach(function(tok){
+    tok = tok.trim();
+    if (!tok) return;
+    if (tok.indexOf('-') >= 0) {
+      var parts = tok.split('-');
+      var a = parseInt(parts[0], 10), b = parseInt(parts[1], 10);
+      if (!isNaN(a) && !isNaN(b)) {
+        var lo = Math.min(a,b), hi = Math.max(a,b);
+        for (var d = lo; d <= hi; d++) push(d);
+      }
+    } else {
+      var n = parseInt(tok, 10);
+      if (!isNaN(n)) push(n);
+    }
+  });
+
+  days.sort(function(a,b){ return a-b; });
+  return days;
+}
+
+function stringifyDays(days) {
+  var uniq = Array.from(new Set((days || []).map(function(n){ return parseInt(n,10); })))
+                  .filter(function(n){ return n >= 0 && n <= 6; })
+                  .sort(function(a,b){ return a-b; });
+  return (uniq.length === 7) ? '*' : uniq.join(',');
+}
+
 function schedParse(str) {
   if (typeof str !== 'string' || !str.trim()) return null;
   var s = (str[0] === '<') ? str.slice(1) : str;
   var p = s.split('>');
   if (p.length !== 4) return null;
+
   return {
     enabled: p[0] === '1',
-    days: p[1] ? p[1].split(',').map(function(x){ return +x; }) : [],
+    days: parseDaysSpec(p[1]),
     start: p[2] || SCHED_DEFAULT.start,
     end:   p[3] || SCHED_DEFAULT.end
   };
@@ -601,7 +641,7 @@ function schedParse(str) {
 
 function schedStringify(o) {
   var enabled = o.enabled ? '1' : '0';
-  var days = (o.days || []).join(',');
+  var days = stringifyDays(o.days || []);
   var start = (o.start && o.start.trim()) ? o.start : SCHED_INPUT_FALLBACK.start;
   var end   = (o.end   && o.end.trim())   ? o.end   : SCHED_INPUT_FALLBACK.end;
   return '<' + [enabled, days, start, end].join('>');
