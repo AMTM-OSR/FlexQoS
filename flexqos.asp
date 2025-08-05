@@ -145,6 +145,19 @@ box-shadow: #2B6692 5px 0px 0px 0px inset;
 td.cat7{
 box-shadow: #6C604F 5px 0px 0px 0px inset;
 }
+#sched_block thead th { 
+color: #fff !important;
+}
+#sched_block .sched-day{
+display: inline-flex;
+align-items: center;
+gap: 4px;
+white-space: nowrap;
+margin: 2px 8px 2px 0;
+}
+#sched_block .sched-daycb{
+margin: 0;
+}
 </style>
 
 <script>
@@ -544,6 +557,115 @@ function draw_conntrack_table() {
 	updateTable();
 }
 
+// ---- SCHEDULER UI ----
+var SCHED_DAYS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+// One source of truth for UI defaults
+var SCHED_DEFAULT = { days:[1,2,3,4,5], start:"07:00", end:"20:00" };
+
+// Fallback if inputs are blank (used when reading the form)
+var SCHED_INPUT_FALLBACK = { start:"07:00", end:"20:00" };
+
+// Build a <tr> for one schedule window
+function schedRowHtml(win) {
+  var daysHtml = '';
+  for (var d = 0; d < 7; d++) {
+    var checked = (win.days && win.days.indexOf(d) >= 0) ? 'checked' : '';
+    daysHtml += '<label class="sched-day"><input type="checkbox" class="sched-daycb" data-day="'+d+'" '+checked+'> '+SCHED_DAYS[d]+'</label>';
+  }
+
+  win = Object.assign({}, SCHED_DEFAULT, win || {});
+  var start = win.start;
+  var end   = win.end;
+  return (
+    '<tr>' +
+      '<td>'+ daysHtml +'</td>' +
+      '<td><input type="time" class="sched-time sched-start" value="'+start+'"></td>' +
+      '<td><input type="time" class="sched-time sched-end" value="'+end+'"><div class="sched-warn" style="display:none;margin-top:4px;">End must be after start</div></td>' +
+    '</tr>'
+  );
+}
+
+function schedParse(str) {
+  if (typeof str !== 'string' || !str.trim()) return null;
+  var s = (str[0] === '<') ? str.slice(1) : str;
+  var p = s.split('>');
+  if (p.length !== 4) return null;
+  return {
+    enabled: p[0] === '1',
+    days: p[1] ? p[1].split(',').map(function(x){ return +x; }) : [],
+    start: p[2] || SCHED_DEFAULT.start,
+    end:   p[3] || SCHED_DEFAULT.end
+  };
+}
+
+function schedStringify(o) {
+  var enabled = o.enabled ? '1' : '0';
+  var days = (o.days || []).join(',');
+  var start = (o.start && o.start.trim()) ? o.start : SCHED_INPUT_FALLBACK.start;
+  var end   = (o.end   && o.end.trim())   ? o.end   : SCHED_INPUT_FALLBACK.end;
+  return '<' + [enabled, days, start, end].join('>');
+}
+
+function schedAddRow(win) {
+  var tbody = document.getElementById('sched_tbody');
+  tbody.innerHTML = ''; // always a single schedule
+  if (!win) win = SCHED_DEFAULT;
+  var tr = document.createElement('tr');
+  tr.innerHTML = schedRowHtml(win);
+  tbody.appendChild(tr);
+}
+
+// Read one row -> {days:[], start:"HH:MM", end:"HH:MM"}
+function schedReadRow(tr) {
+  var cbs = tr.querySelectorAll('.sched-daycb');
+  var days = [];
+  for (var i=0;i<cbs.length;i++) if (cbs[i].checked) days.push(parseInt(cbs[i].getAttribute('data-day')));
+  var start = tr.querySelector('.sched-start').value || SCHED_INPUT_FALLBACK.start;
+  var end   = tr.querySelector('.sched-end').value   || SCHED_INPUT_FALLBACK.end;
+  return { days: days, start: start, end: end };
+}
+
+function timeToMinutes(hm) {
+  var s = hm.split(':'); return parseInt(s[0],10)*60 + parseInt(s[1],10);
+}
+
+// Validate all rows; returns {ok:boolean, windows:[...]}
+function schedSerialize() {
+  var row = document.querySelector('#sched_tbody tr');
+  var win = schedReadRow(row);
+  var warn = row.querySelector('.sched-warn');
+
+  var valid = (win.days.length > 0) && (timeToMinutes(win.end) > timeToMinutes(win.start));
+  warn.style.display = valid ? 'none' : '';
+  return { ok: valid, win: win };
+}
+
+// Show/Hide block on toggle
+function schedToggleUI() {
+  var on = document.getElementById('sched_enabled').checked;
+  document.getElementById('sched_block').style.display = on ? '' : 'none';
+}
+
+// Populate UI from custom_settings.flexqos_schedule
+function schedPopulateFromSettings() {
+  var parsed = schedParse(custom_settings.flexqos_schedule);
+  var enabled = !!(parsed && parsed.enabled);
+
+  var cb = document.getElementById('sched_enabled');
+  cb.checked = enabled;
+  schedToggleUI();
+
+  var win = parsed ? { days: parsed.days, start: parsed.start, end: parsed.end } : SCHED_DEFAULT;
+  schedAddRow(win);
+}
+
+// Wire events once
+function schedInitOnce() {
+  var cb = document.getElementById('sched_enabled');
+  if (cb) cb.addEventListener('change', schedToggleUI);
+}
+
 function setsort(newfield) {
 	if (newfield != sortfield) {
 		sortdir = 0;
@@ -772,6 +894,7 @@ function initial() {
 	// Setup appdb auto-complete menu
 	autocomplete(document.getElementById("appdb_search_x"), catdb_label_array);
 	build_overhead_presets();
+	schedInitOnce();
 	if (based_modelid == "RT-AX88U_PRO" || based_modelid == "GT-AX11000_PRO" || based_modelid == "GT-AX6000" || based_modelid == "GT-AXE16000" || based_modelid == "RT-AX86U_PRO" || based_modelid == "XT12" )
 		document.getElementById('flexqos_fccontrol_tr').style.display = "";
 }
@@ -2136,6 +2259,8 @@ function set_FlexQoS_mod_vars()
 		document.form.flexqos_outputcls.value = "5";
 	else
 		document.form.flexqos_outputcls.value = custom_settings.flexqos_outputcls;
+	// Restore schedule UI
+	schedPopulateFromSettings();
 }
 
 function FlexQoS_reset_iptables() {
@@ -2282,7 +2407,22 @@ function FlexQoS_mod_apply() {
 	}
 	appdb_rulelist_array += appdb_last_rules;
 
-
+	// ---- Save schedule ----
+	if (document.getElementById('sched_enabled').checked) {
+  	var ser = schedSerialize();
+  	if (!ser.ok) {
+    	alert("Schedule has invalid values.\n• Pick at least one day\n• End time must be after start time");
+    	return;
+  	}
+  	custom_settings.flexqos_schedule = schedStringify({
+    	enabled: true,
+    	days: ser.win.days,
+    	start: ser.win.start,
+    	end:   ser.win.end
+  	});
+	} else {
+  	delete custom_settings.flexqos_schedule;
+	}
 	if (iptables_rulelist_array.length > 2999) {
 		alert("Total iptables rules exceeds 2999 bytes! Please delete or consolidate!");
 		return
@@ -2826,6 +2966,26 @@ function DelCookie(cookiename){
 			<input type="radio" name="flexqos_conntrack" class="input" value="1">Yes
 			<input type="radio" name="flexqos_conntrack" class="input" value="0">No
 		</td>
+	</tr>
+	<tr>
+  		<th>Schedule</th>
+  		<td>
+    		<label>
+      		<input type="checkbox" id="sched_enabled"> Enable
+    		</label>
+    		<div id="sched_block" style="margin-top:8px; display:none;">
+      		<table width="100%" border="1" cellspacing="0" cellpadding="4" class="FormTable_table">
+        		<thead>
+          		<tr>
+            		<th style="width:50%;">Days</th>
+            		<th style="width:25%;">Start</th>
+            		<th style="width:25%;">End</th>
+          		</tr>
+        		</thead>
+        		<tbody id="sched_tbody"></tbody>
+      		</table>
+    		</div>
+  		</td>
 	</tr>
 	<tr>
 		<th><a class="hintstyle" href="javascript:void(0);" onClick="openHint('FlexQoS',4);">Router/VPN Client Outbound Traffic Class</th>
