@@ -1093,7 +1093,7 @@ update() {
 
 qos_stop() {
     # Stop Adaptive QoS cleanly
-    logmsg "Stopping Adaptive QoS…"
+    logmsg "Stopping Adaptive QoS..."
     service stop_qos
 
     commit=0
@@ -1110,7 +1110,7 @@ qos_stop() {
 
 qos_start() {
     # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
-    logmsg "Starting Adaptive QoS…"
+    logmsg "Starting Adaptive QoS..."
 
     commit=0
     cur_type="$(nvram get qos_type 2>/dev/null)"
@@ -1154,6 +1154,205 @@ prompt_restart() {
 	fi
 } # prompt_restart
 
+##### QoS Disable Window Scheduler (guided + custom) ###########################
+
+QOS_CRON_OFF="${SCRIPTNAME}_qosoff"
+QOS_CRON_ON="${SCRIPTNAME}_qoson"
+
+# --- helpers ---------------------------------------------------------------
+_qs_trim() { printf "%s" "$1" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//' | tr -d '\r'; }
+_qs_to_dec() { printf "%s" "${1:-0}" | awk '{print $1+0}'; }
+
+_qs_parse_time() {
+    local t h m
+    t="$(_qs_trim "$1")"
+    # Accept HH or HH:MM
+    echo "$t" | grep -Eq '^[0-2]?[0-9](:[0-5]?[0-9])?$' || return 1
+
+    h="${t%%:*}"
+    m="${t#*:}"
+    [ "$t" = "$h" ] && m="0"
+
+    # Force base-10
+    h="$(_qs_to_dec "$h")"
+    m="$(_qs_to_dec "$m")"
+
+    # Range checks
+    [ "$h" -ge 0 ] 2>/dev/null && [ "$h" -le 23 ] || return 1
+    [ "$m" -ge 0 ] 2>/dev/null && [ "$m" -le 59 ] || return 1
+
+    printf "%02d %02d" "$h" "$m"
+}
+
+_qs_valid_dow() {
+  # *, single 0-7, ranges, comma lists (BusyBox crond)
+  echo "$1" | grep -Eq '^(\*|([0-7](-[0-7])?)(,([0-7](-[0-7])?))*)$'
+}
+
+_qs_human_dow() {
+    case "$1" in
+        "*")   printf "every day" ;;
+        "1-5") printf "weekdays (Mon-Fri)" ;;
+        "0,6"| "6,0") printf "weekends (Sat,Sun)" ;;
+        *)     printf "DOW=%s" "$1" ;;
+    esac
+}
+
+_qs_duration_min() {
+    # args: start "MM HH", end "MM HH" -> echo minutes from start→end wrapping midnight
+    set -- $1; sm="$1"; sh="$2"
+    set -- $2; em="$1"; eh="$2"
+    s=$((sh*60+sm)); e=$((eh*60+em))
+    if [ "$e" -le "$s" ]; then
+        echo $((1440 - (s - e)))
+    else
+        echo $((e - s))
+    fi
+}
+
+_qs_show_current() {
+  local lines
+  lines="$(cru l | grep -E "#(${QOS_CRON_ON}|${QOS_CRON_OFF})#" || true)"
+  [ -z "$lines" ] && printf "  (none)\n" || printf "%s\n" "$lines" | sed 's/^/  /'
+}
+
+_qs_clear_jobs() {
+    cru d "${QOS_CRON_OFF}" 2>/dev/null
+    cru d "${QOS_CRON_ON}"  2>/dev/null
+}
+
+_qs_apply_jobs() {
+    # $1=sh $2=sm $3=eh $4=em $5=dow  (all zero-padded already)
+    local sh sm eh em dow
+    sh="$1"; sm="$2"; eh="$3"; em="$4"; dow="$5"
+    [ -n "$dow" ] || dow="*"
+
+    _qs_clear_jobs
+    cru a "${QOS_CRON_ON}" "${sm} ${sh} * * ${dow} ${SCRIPTPATH} -qosstart"
+    cru a "${QOS_CRON_OFF}"  "${em} ${eh} * * ${dow} ${SCRIPTPATH} -qosstop"
+}
+
+_qs_show_current() {
+    local lines
+    lines="$(cru l | grep -E "#(${QOS_CRON_ON}|${QOS_CRON_OFF})#" || true)"
+    if [ -z "$lines" ]; then
+        printf "  (none)\n"
+    else
+        printf "%s\n" "$lines" | sed 's/^/  /'
+    fi
+}
+
+# --- interactive flows -----------------------------------------------------
+
+_qs_prompt() {
+    # $1=prompt  $2=default (optional)
+    local v
+    while :; do
+        [ -n "$2" ] && printf "%s [%s]: " "$1" "$2" >&2 || printf "%s: " "$1" >&2
+        read -r v || return 1
+        v="$(_qs_trim "$v")"
+        [ -n "$v" ] || v="$2"
+        printf "%s" "$v"
+        return 0
+    done
+}
+
+_qs_guided() {
+    printf "\nConfigure daily QoS window (up to 23h):\n" >&2
+    printf " - QoS ENABLE at START time, DISABLE at END time.\n" >&2
+    printf " - Times: HH or HH:MM (24h).\n\n" >&2
+
+    printf "Days of week:\n  1) Every day (*)\n  2) Weekdays (1-5)\n  3) Weekends (0,6)\n" >&2
+
+    local sel dow
+    while :; do
+        sel="$(_qs_prompt "Select DOW (1-3, or e=exit)" "")" || return 1
+        case "$sel" in
+            e|E|cancel|Cancel) return 1 ;;
+            1) dow="*"   ; break ;;
+            2) dow="1-5" ; break ;;
+            3) dow="0,6" ; break ;;
+            *) printf "Invalid selection.\n" >&2 ;;
+        esac
+    done
+
+    local st et sh sm eh em t
+    while :; do
+      t="$(_qs_prompt "START time to ENABLE QoS" "07:00")" || return 1
+      if out="$(_qs_parse_time "$t")"; then
+        set -- $out; sh="$1"; sm="$2"
+        break
+      fi
+      printf "Invalid time. Use HH or HH:MM (00-23 for hours, 00-59 for minutes).\n" >&2
+    done
+
+    # END time
+    while :; do
+      t="$(_qs_prompt "END time to DISABLE QoS" "20:00")" || return 1
+      if out="$(_qs_parse_time "$t")"; then
+        set -- $out; eh="$1"; em="$2"
+        break
+      fi
+      printf "Invalid time. Use HH or HH:MM (00-23 for hours, 00-59 for minutes).\n" >&2
+    done
+
+    printf "\nSummary:\n  ENABLE: %s:%s\n  DISABLE : %s:%s\n  Days   : %s\n" "$sh" "$sm" "$eh" "$em" "${dow}"
+    t="$(_qs_prompt "Apply this schedule? (y/n)" "y")" || return 1
+    case "$t" in
+        y|Y) _qs_apply_jobs "$sh" "$sm" "$eh" "$em" "$dow"; printf "OK. Schedule applied.\n" >&2 ;;
+        *)   printf "Canceled.\n" >&2; return 1 ;;
+    esac
+}
+
+_qs_custom() {
+    printf "\nCustom cron mode:\n" >&2
+    printf "Enter the custom cron fields below (MIN HOUR DOM MON DOW).\n" >&2
+    printf "Examples: '0 20 * * *' or '0 7 * * 1-5'\n\n" >&2
+
+    local off5 on5
+    printf "Enable (qosstart) schedule> " >&2
+    read -r on5 || return 1
+    on5="$(_qs_trim "$on5")"
+
+    printf "Disable (qosstop) schedule> " >&2
+    read -r off5 || return 1
+    off5="$(_qs_trim "$off5")"
+
+    echo "$on5"  | grep -qE '^([^[:space:]]+[[:space:]]+){4}[^[:space:]]+$' || { printf "Bad enable schedule.\n"  >&2; return 1; }
+    echo "$off5" | grep -qE '^([^[:space:]]+[[:space:]]+){4}[^[:space:]]+$' || { printf "Bad disable schedule.\n" >&2; return 1; }
+
+    _qs_clear_jobs
+    cru a "${QOS_CRON_ON}"  "${on5}  ${SCRIPTPATH} -qosstart"
+    cru a "${QOS_CRON_OFF}" "${off5} ${SCRIPTPATH} -qosstop"
+
+    printf "OK. Custom entries applied.\n" >&2
+    return 0
+}
+
+qos_schedule_menu() {
+    while :; do
+        printf "\n================ QoS Schedule =================\n"
+        printf "Current QoS schedule (if any):\n"
+        _qs_show_current
+        printf "\nChoose an option:\n"
+        printf "  1) Guided setup (start/end + DOW)\n"
+        printf "  2) Custom cron (5 fields)\n"
+        printf "  3) Clear schedule\n"
+        printf "  e) Exit\n"
+        printf "-----------------------------------------------\n"
+        printf "Enter selection: "
+        read -r sel || return
+        case "$sel" in
+            1) _qs_guided ;;
+            2) _qs_custom ;;
+            3) _qs_clear_jobs; printf "Schedule cleared.\n" ;;
+            e|E|exit|Exit) return ;;
+            *) printf "Invalid selection.\n" ;;
+        esac
+    done
+}
+
+
 menu() {
 	# Minimal interactive, menu-driven interface for basic maintenance functions.
 	local yn
@@ -1170,7 +1369,7 @@ menu() {
 	printf "  (2) update       check for updates\n"
 	printf "  (3) debug        traffic control parameters\n"
 	printf "  (4) restart      restart QoS completely\n"
-	printf "  (5) %-12s %s QoS\n" "${qos_action}" "${qos_action}"
+	printf "  (5) schedule     schedule QoS\n"
 	printf "  (6) backup       create settings backup\n"
 	if [ -f "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh" ]; then
 		printf "  (7) restore      restore settings from backup\n"
@@ -1195,11 +1394,7 @@ menu() {
 			prompt_restart
 		;;
 		'5')
-			if [ "${qos_action}" = "stop" ]; then
-				qos_stop
-			else
-				qos_start
-			fi
+			qos_schedule_menu
 		;;
 		'6')
 			backup create
@@ -1730,7 +1925,7 @@ startup() {
 	#  auto-remove on unsupported Wi-Fi 7 firmware for firmware upgrades betweem 3004 and 3006
 	if nvram get rc_support | grep -q -w wifi7
 	then
-		logmsg "Wi-Fi 7 router detected – ${SCRIPTNAME_DISPLAY} is unsupported. Initiating automatic uninstall."
+		logmsg "Wi-Fi 7 router detected - ${SCRIPTNAME_DISPLAY} is unsupported. Initiating automatic uninstall."
 		uninstall force
 		return 1        # Abort the rest of startup
 	fi
