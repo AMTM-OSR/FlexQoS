@@ -1092,42 +1092,50 @@ update() {
 } # update
 
 qos_stop() {
-    # Stop Adaptive QoS cleanly
+    # Stop Adaptive QoS cleanly (runtime only; no flash writes by default)
+    local cur_enable need_stop
     logmsg "Stopping Adaptive QoS..."
-    service stop_qos
+    need_stop=0
 
-    commit=0
     cur_enable="$(nvram get qos_enable 2>/dev/null)"
     if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "0" ]; then
         nvram set qos_enable=0
-        commit=1
+        need_stop=1
     fi
 
-    # Only commit if we changed something
-    [ "${commit}" = "1" ] && nvram commit
-    logmsg "Adaptive QoS stopped."
+    if [ "${need_stop}" = "1" ]; then
+        service stop_qos
+        # Only persist if explicitly requested
+        logmsg "Adaptive QoS stopped."
+    else
+        logmsg "Adaptive QoS already disabled; nothing to do."
+    fi
 }
 
 qos_start() {
+    local cur_type cur_enable need_start
     # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
     logmsg "Starting Adaptive QoS..."
+    need_start=0
 
-    commit=0
     cur_type="$(nvram get qos_type 2>/dev/null)"
     if [ -n "${cur_type}" ] && [ "${cur_type}" != "1" ]; then
         nvram set qos_type=1
-        commit=1
     fi
 
     cur_enable="$(nvram get qos_enable 2>/dev/null)"
     if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "1" ]; then
         nvram set qos_enable=1
-        commit=1
+        need_start=1
     fi
 
-    [ "${commit}" = "1" ] && nvram commit
-    service start_qos
-    logmsg "Adaptive QoS started."
+    if [ "${need_start}" = "1" ]; then
+        service start_qos
+        # Only persist if explicitly requested
+        logmsg "Adaptive QoS started."
+    else
+        logmsg "Adaptive QoS already running; nothing to do."
+    fi
 }
 
 prompt_restart() {
@@ -1208,12 +1216,6 @@ _qs_duration_min() {
     else
         echo $((e - s))
     fi
-}
-
-_qs_show_current() {
-  local lines
-  lines="$(cru l | grep -E "#(${QOS_CRON_ON}|${QOS_CRON_OFF})#" || true)"
-  [ -z "$lines" ] && printf "  (none)\n" || printf "%s\n" "$lines" | sed 's/^/  /'
 }
 
 _qs_clear_jobs() {
