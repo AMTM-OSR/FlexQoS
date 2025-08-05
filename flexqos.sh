@@ -2028,6 +2028,7 @@ startup() {
 	install_webui mount
 	generate_bwdpi_arrays
 	get_config
+	qos_schedule_apply_from_config
 
 	case "$(uname -r)" in
 	4.19.*)
