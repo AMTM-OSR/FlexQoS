@@ -1187,6 +1187,7 @@ _qs_settings_set() {
 _qs_settings_delete() {
     local file="/jffs/addons/custom_settings.txt"
     [ -f "$file" ] && sed -i "/^${SCRIPTNAME}_schedule[[:space:]]/d" "$file"
+    SCHEDULE=""
 }
 
 _qs_parse_schedule_var() {
