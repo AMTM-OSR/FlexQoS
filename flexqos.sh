@@ -1170,8 +1170,10 @@ SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
 
 # --- helpers ---------------------------------------------------------------
 _qs_trim() { printf "%s" "$1" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//' | tr -d '\r'; }
-_qs_to_dec() { printf '%d' "$((10#${1:-0}))"; }
-_qs_hm() { printf '%02d:%02d' "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"; }
+_qs_to_dec() { printf "%s" "${1:-0}" | awk '{print $1+0}'; }
+_qs_hm() {
+    printf "%02d:%02d" "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"
+}
 
 _qs_settings_set() {
     # args: enabled(0/1) dow sh sm eh em
@@ -1185,7 +1187,6 @@ _qs_settings_set() {
 _qs_settings_delete() {
     local file="/jffs/addons/custom_settings.txt"
     [ -f "$file" ] && sed -i "/^${SCRIPTNAME}_schedule[[:space:]]/d" "$file"
-    SCHEDULE=""
 }
 
 _qs_parse_schedule_var() {
@@ -1195,11 +1196,15 @@ _qs_parse_schedule_var() {
     s="$(_qs_trim "$SCHEDULE")"
     [ -n "$s" ] || return 1
 
-    # Split without regex validation; validate components after
-    s="${s#<}"
-    en="${s%%>*}"; s="${s#*>}"
-    dow="${s%%>*}"; s="${s#*>}"
-    st="${s%%>*}";  et="${s#*>}"
+    # Validate format without using a `case` pattern (BusyBox ash can choke on < > here)
+    printf "%s" "$s" | grep -Eq '^<[01]>[^>]+>[0-2]?[0-9](:[0-5]?[0-9])?>[0-2]?[0-9](:[0-5]?[0-9])?$' || return 1
+
+    en="${s#<}"; en="${en%%>*}"
+    rest="${s#*>}"
+    dow="${rest%%>*}"
+    rest="${rest#*>}"
+    st="${rest%%>*}"
+    et="${rest#*>}"
 
     [ "$en" = "1" ] || [ "$en" = "0" ] || return 1
     _qs_valid_dow "$dow" || return 1
@@ -1228,14 +1233,14 @@ qos_schedule_apply_from_config() {
 }
 
 _qs_parse_time() {
-    # Accept HH or HH:MM
     local t h m
     t="$(_qs_trim "$1")"
+    # Accept HH or HH:MM
+    echo "$t" | grep -Eq '^[0-2]?[0-9](:[0-5]?[0-9])?$' || return 1
 
-    case "$t" in
-        *:*) h="${t%%:*}"; m="${t#*:}" ;;
-        *)   h="$t"; m="0" ;;
-    esac
+    h="${t%%:*}"
+    m="${t#*:}"
+    [ "$t" = "$h" ] && m="0"
 
     h="$(_qs_to_dec "$h")"
     m="$(_qs_to_dec "$m")"
@@ -1243,7 +1248,7 @@ _qs_parse_time() {
     [ "$h" -ge 0 ] 2>/dev/null && [ "$h" -le 23 ] || return 1
     [ "$m" -ge 0 ] 2>/dev/null && [ "$m" -le 59 ] || return 1
 
-    printf '%02d %02d' "$h" "$m"
+    printf "%02d %02d" "$h" "$m"
 }
 
 _qs_valid_dow() {
