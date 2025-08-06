@@ -618,11 +618,12 @@ function parseDaysSpec(spec) {
   return days;
 }
 
-function stringifyDays(days) {
+ function stringifyDays(days) {
   var uniq = Array.from(new Set((days || []).map(function(n){ return parseInt(n,10); })))
                   .filter(function(n){ return n >= 0 && n <= 6; })
                   .sort(function(a,b){ return a-b; });
-  return (uniq.length === 7) ? '*' : uniq.join(',');
+  // Avoid '*' because ASUSWRT cru will glob-expand it in a subshell
+  return (uniq.length === 7) ? '0-6' : uniq.join(',');
 }
 
 function schedParse(str) {
