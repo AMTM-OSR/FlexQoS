@@ -1170,10 +1170,11 @@ SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
 
 # --- helpers ---------------------------------------------------------------
 _qs_trim() { printf "%s" "$1" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//' | tr -d '\r'; }
-_qs_to_dec() { printf "%s" "${1:-0}" | awk '{print $1+0}'; }
+_qs_to_dec() { printf '%s\n' "${1:-0}" | awk '{print $1+0}'; }
 _qs_hm() {
     printf "%02d:%02d" "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"
 }
+_qs_int() { _qs_to_dec "$1"; } 
 
 _qs_settings_set() {
     # args: enabled(0/1) dow sh sm eh em
@@ -1236,20 +1237,54 @@ qos_schedule_apply_from_config() {
 _qs_parse_time() {
     local t h m
     t="$(_qs_trim "$1")"
-    # Accept HH or HH:MM
-    echo "$t" | grep -Eq '^[0-2]?[0-9](:[0-5]?[0-9])?$' || return 1
 
-    h="${t%%:*}"
-    m="${t#*:}"
-    [ "$t" = "$h" ] && m="0"
+    h="${t%%:*}"          # chars before first “:”
+    m="${t#*:}"           # chars after  first “:”
+    [ "$t" = "$h" ] && m="0"   # no “:MM” → default 0
 
+    # SAFE decimal cast – BusyBox ash chokes on “10#…”, so use the
+    # existing helper (_qs_to_dec prints “value+0” via awk)
     h="$(_qs_to_dec "$h")"
     m="$(_qs_to_dec "$m")"
 
-    [ "$h" -ge 0 ] 2>/dev/null && [ "$h" -le 23 ] || return 1
-    [ "$m" -ge 0 ] 2>/dev/null && [ "$m" -le 59 ] || return 1
+    printf '%02d %02d' "$h" "$m"
+}
 
-    printf "%02d %02d" "$h" "$m"
+_qs_now_in_window() {
+    # (sh sm eh em dow)
+    local sh=$(_qs_to_dec "$1"); sm=$(_qs_to_dec "$2")
+    local eh=$(_qs_to_dec "$3"); em=$(_qs_to_dec "$4")
+    local dow="$5" day ok part s e now start end
+    dow="$5"
+
+    # --- precalc the window in minutes
+    start=$(( sh * 60 + sm ))
+    end=$(( eh * 60 + em ))
+
+    # ----- DOW filter -----
+    if [ "$dow" != "*" ]; then
+        day="$(date +%w)"; ok=0
+        IFS=','; for part in $dow; do
+            if echo "$part" | grep -q -- '-'; then
+                s="${part%-*}" ; e="${part#*-}"
+                [ "$day" -ge "$s" ] && [ "$day" -le "$e" ] && { ok=1; break; }
+            else
+                [ "$day" = "$part" ] && { ok=1; break; }
+            fi
+        done; IFS=' '
+        [ "$ok" = 1 ] || return 1
+    fi
+
+    # ---------- 2.  Minute-of-day match ----------
+    now_h=$(_qs_to_dec "$(date +%H)")
+    now_m=$(_qs_to_dec "$(date +%M)")
+    now=$(( now_h * 60 + now_m ))
+
+    if [ "$start" -le "$end" ]; then
+        [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ]
+    else
+        [ "$now" -ge "$start" ] || [ "$now" -lt "$end" ]
+    fi
 }
 
 _qs_valid_dow() {
@@ -1267,10 +1302,16 @@ _qs_human_dow() {
 }
 
 _qs_duration_min() {
-    # args: start "MM HH", end "MM HH" -> echo minutes from start→end wrapping midnight
+    # args: start "MM HH", end "MM HH" → echo minutes from start→end (wraps midnight)
     set -- $1; sm="$1"; sh="$2"
     set -- $2; em="$1"; eh="$2"
-    s=$((sh*60+sm)); e=$((eh*60+em))
+
+   # cast each field safely to decimal before arithmetic
+   sh=$(_qs_to_dec "$sh"); sm=$(_qs_to_dec "$sm")
+   eh=$(_qs_to_dec "$eh"); em=$(_qs_to_dec "$em")
+   s=$(( sh * 60 + sm ))
+   e=$(( eh * 60 + em ))
+
     if [ "$e" -le "$s" ]; then
         echo $((1440 - (s - e)))
     else
@@ -1284,14 +1325,21 @@ _qs_clear_jobs() {
 }
 
 _qs_apply_jobs() {
-    # $1=sh $2=sm $3=eh $4=em $5=dow  (all zero-padded already)
-    local sh sm eh em dow
-    sh="$1"; sm="$2"; eh="$3"; em="$4"; dow="$5"
-    [ -n "$dow" ] || dow="*"
+    # (sh sm eh em dow)
+    local sh="$(_qs_int "$1")" sm="$(_qs_int "$2")"
+    local eh="$(_qs_int "$3")" em="$(_qs_int "$4")"
+    local dow="${5:-*}"
 
     _qs_clear_jobs
-    cru a "${QOS_CRON_ON}" "${sm} ${sh} * * ${dow} ${SCRIPTPATH} -qosstart"
-    cru a "${QOS_CRON_OFF}"  "${em} ${eh} * * ${dow} ${SCRIPTPATH} -qosstop"
+    cru a "${QOS_CRON_ON}"  "$(printf '%d %d * * %s %s -qosstart' "$sm" "$sh" "$dow" "$SCRIPTPATH")"
+    cru a "${QOS_CRON_OFF}" "$(printf '%d %d * * %s %s -qosstop'  "$em" "$eh" "$dow" "$SCRIPTPATH")"
+
+    # Immediate alignment
+    if _qs_now_in_window "$sh" "$sm" "$eh" "$em" "$dow"; then
+        qos_start
+    else
+        qos_stop
+    fi
 }
 
 _qs_show_current() {
