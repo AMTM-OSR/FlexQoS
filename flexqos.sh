@@ -1174,6 +1174,17 @@ _qs_to_dec() { printf '%s\n' "${1:-0}" | awk '{print $1+0}'; }
 _qs_hm() {
     printf "%02d:%02d" "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"
 }
+_qs_int() { printf '%d' "$(_qs_to_dec "$1")"; }
+
+_qs_duration_min() {
+    set -- $1;  local sm=$(_qs_int "$1") sh=$(_qs_int "$2")
+    set -- $2;  local em=$(_qs_int "$1") eh=$(_qs_int "$2")
+
+    local s=$(( sh * 60 + sm ))
+    local e=$(( eh * 60 + em ))
+
+    [ "$e" -le "$s" ] && echo $(( 1440 - (s - e) )) || echo $(( e - s ))
+}
 
 _qs_settings_set() {
     # args: enabled(0/1) dow sh sm eh em
@@ -1198,12 +1209,49 @@ _qs_parse_time() {
     m="${t#*:}"           # chars after  first “:”
     [ "$t" = "$h" ] && m="0"   # no “:MM” → default 0
 
-    # SAFE decimal cast – BusyBox ash chokes on “10#…”, so use the
+    # SAFE decimal cast - BusyBox ash chokes on “10#…”, so use the
     # existing helper (_qs_to_dec prints “value+0” via awk)
     h="$(_qs_to_dec "$h")"
     m="$(_qs_to_dec "$m")"
 
+    # ----- range check -----
+    [ "$h" -ge 0 ] && [ "$h" -le 23 ] && \
+    [ "$m" -ge 0 ] && [ "$m" -le 59 ] || return 1
+
     printf '%02d %02d' "$h" "$m"
+}
+
+_qs_now_in_window() {
+    local sh=$(_qs_int "$1") sm=$(_qs_int "$2")
+    local eh=$(_qs_int "$3") em=$(_qs_int "$4")
+    local dow="${5:-*}"
+
+    # -------- 1. DOW match --------
+    if [ "$dow" != "*" ]; then
+        local today="$(date +%w)" ok=0 part s e
+        IFS=','; for part in $dow; do
+            if echo "$part" | grep -q -- '-'; then
+                s="${part%-*}" ; e="${part#*-}"
+                [ "$today" -ge "$s" ] && [ "$today" -le "$e" ] && { ok=1; break; }
+            else
+                [ "$today" = "$part" ] && { ok=1; break; }
+            fi
+        done; IFS=' '
+        [ "$ok" = 1 ] || return 1            # not a matching day
+    fi
+
+    # -------- 2. Minute-of-day match --------
+    local now_h=$(_qs_int "$(date +%H)")
+    local now_m=$(_qs_int "$(date +%M)")
+    local now=$(( now_h * 60 + now_m ))
+    local start=$(( sh * 60 + sm ))
+    local end=$(( eh * 60 + em ))
+
+    if [ "$start" -le "$end" ]; then
+        [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ]
+    else                                # window crosses midnight
+        [ "$now" -ge "$start" ] || [ "$now" -lt "$end" ]
+    fi
 }
 
 _qs_valid_dow() {
@@ -1248,8 +1296,10 @@ _qs_each_record() {
 _qs_apply_jobs() {
     _qs_clear_jobs
     local n=0 sh sm eh em job
+    local aligned=0
 
-    _qs_each_record | while read -r en dow st et; do
+    # read records without spawning a subshell so we can update “aligned”
+    while read -r en dow st et; do
         [ "$en" = "1" ] || continue          # only enabled windows
 
         # ---------- START ----------
@@ -1269,7 +1319,15 @@ _qs_apply_jobs() {
             cru a "$job" "$(printf '%d %d * * %s %s -qosstop' \
                             "$em" "$eh" "$dow" "$SCRIPTPATH")"
         fi
-    done
+        # ---------- Immediate alignment ----------
+        if _qs_now_in_window "$sh" "$sm" "$eh" "$em" "$dow"; then
+            aligned=1
+        fi
+    done <<EOF
+$(_qs_each_record)
+EOF
+
+    [ "$aligned" = 1 ] && qos_start || qos_stop
 }
 
 qos_schedule_apply_from_config() {
@@ -1330,14 +1388,18 @@ _qs_guided() {
 
     while :; do
         t="$(_qs_prompt 'START time to ENABLE QoS' '07:00')" || return 1
-        if out="$(_qs_parse_time "$t")"; then set -- $out; sh=$1; sm=$2; break; fi
-        printf "Invalid time. Use HH or HH:MM.\n" >&2
+        if out="$(_qs_parse_time "$t")"; then
+            set -- $out; sh=$1; sm=$2; break
+        fi
+        printf "Invalid time - hours 0-23, minutes 0-59.\n" >&2
     done
 
     while :; do
         t="$(_qs_prompt 'END time to DISABLE QoS' '20:00')" || return 1
-        if out="$(_qs_parse_time "$t")"; then set -- $out; eh=$1; em=$2; break; fi
-        printf "Invalid time. Use HH or HH:MM.\n" >&2
+        if out="$(_qs_parse_time "$t")"; then
+            set -- $out; eh=$1; em=$2; break
+        fi
+        printf "Invalid time - hours 0-23, minutes 0-59.\n" >&2
     done
 
     printf "\nSummary:\n  ENABLE: %s:%s\n  DISABLE: %s:%s\n  Days   : %s\n" \
