@@ -1530,11 +1530,6 @@ menu() {
 	clear
 	sed -n '2,10p' "${0}"		# display banner
 	scriptinfo
-    if [ "$(nvram get qos_enable)" = "1" ]; then
-        qos_action="stop"     # show “stop” if QoS is running
-    else
-        qos_action="start"    # show “start” if QoS is stopped
-    fi
 	printf "  (1) about        explain functionality\n"
 	printf "  (2) update       check for updates\n"
 	printf "  (3) debug        traffic control parameters\n"
