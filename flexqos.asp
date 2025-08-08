@@ -567,144 +567,219 @@ var SCHED_DEFAULT = { days:[1,2,3,4,5], start:"07:00", end:"20:00" };
 var SCHED_INPUT_FALLBACK = { start:"07:00", end:"20:00" };
 
 // Build a <tr> for one schedule window
-function schedRowHtml(win) {
-  var daysHtml = '';
-  for (var d = 0; d < 7; d++) {
-    var checked = (win.days && win.days.indexOf(d) >= 0) ? 'checked' : '';
+function schedRowHtml(win, idx){
+  win = Object.assign({}, SCHED_DEFAULT, win || {});
+  var daysHtml = "";
+  for (var d = 0; d < 7; d++){
+    var checked = (win.days.indexOf(d) >= 0) ? "checked" : "";
     daysHtml += '<label class="sched-day"><input type="checkbox" class="sched-daycb" data-day="'+d+'" '+checked+'> '+SCHED_DAYS[d]+'</label>';
   }
 
-  win = Object.assign({}, SCHED_DEFAULT, win || {});
-  var start = win.start;
-  var end   = win.end;
+  /* keep four visible cells so columns stay aligned            *
+   * – row-0 shows only Start                                  *
+   * – row-1 shows only End                                    */
+  var startCell, endCell;
+  if (idx === 0){                    /* Start row */
+      startCell = '<td><input type="time" class="sched-time sched-start" value="'+win.start+'"></td>';
+      /* blank cell but keep hidden value for serializer */
+      endCell   = '<td>&nbsp;<input type="hidden" class="sched-time sched-end" value="'+win.end+'"></td>';
+  }else{                             /* End row   */
+      /* blank cell but keep hidden value for serializer */
+      startCell = '<td>&nbsp;<input type="hidden" class="sched-time sched-start" value="'+win.start+'"></td>';
+      endCell   = '<td><input type="time" class="sched-time sched-end" value="'+win.end+'"></td>';
+  }
+
+  /* the last <td> kept only for layout — no minus button */
   return (
-    '<tr>' +
+    '<tr data-row="'+idx+'">' +
       '<td>'+ daysHtml +'</td>' +
-      '<td><input type="time" class="sched-time sched-start" value="'+start+'"></td>' +
-      '<td><input type="time" class="sched-time sched-end" value="'+end+'"><div class="sched-warn" style="display:none;margin-top:4px;">End must be after start</div></td>' +
+      startCell + endCell +
     '</tr>'
   );
 }
 
-function parseDaysSpec(spec) {
-  if (typeof spec !== 'string') return [];
-  spec = spec.trim();
-  if (!spec) return [];
-  if (spec === '*') return [0,1,2,3,4,5,6];
+function parseDaysSpec(spec){
+  if (typeof spec !== "string") return [];
+  spec = spec.trim(); if (!spec) return [];
+  if (spec === "*") return [0,1,2,3,4,5,6];
 
-  var days = [];
-  var push = function(n){
-    if (n === 7) n = 0;                // 7 == Sunday
+  var days = [], push = function(n){
+    if (n === 7) n = 0;
     if (n >= 0 && n <= 6 && days.indexOf(n) < 0) days.push(n);
   };
 
-  spec.split(',').forEach(function(tok){
-    tok = tok.trim();
-    if (!tok) return;
-    if (tok.indexOf('-') >= 0) {
-      var parts = tok.split('-');
-      var a = parseInt(parts[0], 10), b = parseInt(parts[1], 10);
-      if (!isNaN(a) && !isNaN(b)) {
+  spec.split(",").forEach(function(tok){
+    tok = tok.trim(); if (!tok) return;
+    if (tok.indexOf("-") >= 0){
+      var p = tok.split("-"), a = parseInt(p[0],10), b = parseInt(p[1],10);
+      if (!isNaN(a) && !isNaN(b)){
         var lo = Math.min(a,b), hi = Math.max(a,b);
         for (var d = lo; d <= hi; d++) push(d);
       }
-    } else {
-      var n = parseInt(tok, 10);
-      if (!isNaN(n)) push(n);
+    }else{
+      var n = parseInt(tok,10); if (!isNaN(n)) push(n);
     }
   });
-
-  days.sort(function(a,b){ return a-b; });
-  return days;
+  return days.sort(function(a,b){ return a - b; });
 }
 
- function stringifyDays(days) {
-  var uniq = Array.from(new Set((days || []).map(function(n){ return parseInt(n,10); })))
-                  .filter(function(n){ return n >= 0 && n <= 6; })
-                  .sort(function(a,b){ return a-b; });
-  // Avoid '*' because ASUSWRT cru will glob-expand it in a subshell
-  return (uniq.length === 7) ? '0-6' : uniq.join(',');
+function stringifyDays(days){
+  var uniq = Array.from(new Set((days||[]).map(function(n){ return parseInt(n,10); })))
+                   .filter(function(n){ return n >= 0 && n <= 6; })
+                   .sort(function(a,b){ return a - b; });
+  return (uniq.length === 7) ? "0-6" : uniq.join(",");
 }
 
-function schedParse(str) {
-  if (typeof str !== 'string' || !str.trim()) return null;
-  var s = (str[0] === '<') ? str.slice(1) : str;
-  var p = s.split('>');
-  if (p.length !== 4) return null;
+function schedParse(str){
+  if (typeof str !== "string" || !str.trim()) return null;
 
-  return {
-    enabled: p[0] === '1',
-    days: parseDaysSpec(p[1]),
-    start: p[2] || SCHED_DEFAULT.start,
-    end:   p[3] || SCHED_DEFAULT.end
+  const p = str.replace(/^</,"").replace(/>$/,"").split(">");  // drop wrappers
+  if (p.length < 3 || p.length > 4) return null;               // guard rails
+
+  const obj = {
+    enabled : (p[0] === "1"),
+    days    : parseDaysSpec(p[1])
   };
+
+  if (p.length === 3){                 // <1>{days}{time}
+    // Decide whether this is a start-only or end-only record
+    // We treat 00:00 or blank on purpose as “start”.
+    obj.start = p[2];
+  }else{                               // <1>{days}{start}{end}
+    obj.start = p[2];
+    obj.end   = p[3];
+  }
+  return obj;
 }
 
-function schedStringify(o) {
-  var enabled = o.enabled ? '1' : '0';
-  var days = stringifyDays(o.days || []);
-  var start = (o.start && o.start.trim()) ? o.start : SCHED_INPUT_FALLBACK.start;
-  var end   = (o.end   && o.end.trim())   ? o.end   : SCHED_INPUT_FALLBACK.end;
-  return '<' + [enabled, days, start, end].join('>');
+function schedStringify(o){
+  const enabled = o.enabled ? "1" : "0";
+  const days    = stringifyDays(o.days || []);
+
+  const parts = [enabled, days];          // always these two
+
+  if (o.hasOwnProperty("start")) parts.push(o.start || "");
+  if (o.hasOwnProperty("end"))   parts.push(o.end   || "");
+
+  return "<" + parts.join(">") + ">";
 }
 
-function schedAddRow(win) {
-  var tbody = document.getElementById('sched_tbody');
-  tbody.innerHTML = ''; // always a single schedule
-  if (!win) win = SCHED_DEFAULT;
-  var tr = document.createElement('tr');
-  tr.innerHTML = schedRowHtml(win);
-  tbody.appendChild(tr);
+function schedAddRow(win){
+   var tbody = document.getElementById("sched_tbody");
+
+   /* two rows (Start & End) are already present → nothing to add */
+   /* stop somewhere sensible – six windows = 12 rows */
+   if (tbody.children.length >= 12) return;
+
+   var idx   = tbody.children.length;
+   var tmp   = document.createElement("tbody");
+   tmp.innerHTML = schedRowHtml(win, idx);
+   tbody.appendChild(tmp.firstElementChild);
+
+  /* The old “+” button is gone; guard against null */
+  if (tbody.children.length >= 2){
+    var plus = document.getElementById("sched_add_btn");
+    if (plus) plus.disabled = true;
+  }
 }
 
-// Read one row -> {days:[], start:"HH:MM", end:"HH:MM"}
-function schedReadRow(tr) {
-  var cbs = tr.querySelectorAll('.sched-daycb');
+function schedReadRow(tr){
   var days = [];
-  for (var i=0;i<cbs.length;i++) if (cbs[i].checked) days.push(parseInt(cbs[i].getAttribute('data-day')));
-  var start = tr.querySelector('.sched-start').value || SCHED_INPUT_FALLBACK.start;
-  var end   = tr.querySelector('.sched-end').value   || SCHED_INPUT_FALLBACK.end;
-  return { days: days, start: start, end: end };
+  tr.querySelectorAll(".sched-daycb").forEach(function(cb){
+    if (cb.checked) days.push(parseInt(cb.getAttribute("data-day"),10));
+  });
+  var start = tr.querySelector(".sched-start").value || SCHED_FALLBACK.start;
+  var end   = tr.querySelector(".sched-end").value   || SCHED_FALLBACK.end;
+  return { days:days, start:start, end:end, enabled:true };
 }
 
-function timeToMinutes(hm) {
-  var s = hm.split(':'); return parseInt(s[0],10)*60 + parseInt(s[1],10);
+function timeToMinutes(hm){
+  var s = hm.split(":"); return parseInt(s[0],10)*60 + parseInt(s[1],10);
 }
 
 // Validate all rows; returns {ok:boolean, windows:[...]}
-function schedSerialize() {
-  var row = document.querySelector('#sched_tbody tr');
-  var win = schedReadRow(row);
-  var warn = row.querySelector('.sched-warn');
+function schedSerialize () {
+  const rows = document.querySelectorAll("#sched_tbody tr");
+  if (rows.length % 2 !== 0){
+    return { ok:false, err:"Start/End rows must be in pairs", str:"" };
+  }
 
-  var valid = (win.days.length > 0) && (timeToMinutes(win.end) > timeToMinutes(win.start));
-  warn.style.display = valid ? 'none' : '';
-  return { ok: valid, win: win };
+  const blocks = [];
+
+  for (let i = 0; i < rows.length; i += 2){
+    const s = schedReadRow(rows[i]);       // start-row
+    const e = schedReadRow(rows[i+1]);     // end-row
+
+    if (!s.days.length || !e.days.length){
+      return { ok:false,
+               err:"Each window needs days ticked on BOTH rows",
+               str:"" };
+    }
+
+    blocks.push( schedStringify({
+      enabled : true,
+      days    : s.days,
+      start   : s.start          // end intentionally omitted
+    }));
+
+    blocks.push( schedStringify({
+      enabled : true,
+      days    : e.days,
+      end     : e.end            // start intentionally omitted
+    }));
+  }
+
+  return { ok:true, err:"", str:blocks.join("|") };
 }
 
 // Show/Hide block on toggle
-function schedToggleUI() {
-  var on = document.getElementById('sched_enabled').checked;
-  document.getElementById('sched_block').style.display = on ? '' : 'none';
+function schedToggleUI(){
+  const on = document.getElementById("sched_enabled").checked;
+  document.getElementById("sched_block").style.display = on ? "" : "none";
+
+  /* —---- Auto-seed one default window (Mo-Fr 07:00-20:00) ----- */
+  if (on &&
+      !document.getElementById("sched_tbody").children.length &&
+      !(custom_settings.flexqos_schedule || "").trim()            // <-- new
+  ){
+      // row 0  → Start   (07:00)
+      schedAddRow({ days:[1,2,3,4,5], start:"07:00" });
+      // row 1  → End     (20:00)
+      schedAddRow({ days:[1,2,3,4,5], end  :"20:00" });
+  }
 }
 
 // Populate UI from custom_settings.flexqos_schedule
-function schedPopulateFromSettings() {
-  var parsed = schedParse(custom_settings.flexqos_schedule);
-  var enabled = !!(parsed && parsed.enabled);
+function schedPopulateFromSettings(){
+  const raw = (custom_settings.flexqos_schedule || "").trim();
+  if (!raw) return;                       // nothing stored yet
 
-  var cb = document.getElementById('sched_enabled');
-  cb.checked = enabled;
+  document.getElementById("sched_enabled").checked = true;
   schedToggleUI();
 
-  var win = parsed ? { days: parsed.days, start: parsed.start, end: parsed.end } : SCHED_DEFAULT;
-  schedAddRow(win);
+  raw.split("|").forEach(part => {
+    const win = schedParse(part);
+    if (!win) return;
+
+    /* decide which cell (Start / End) this record belongs to */
+    if (win.start && !win.end){
+      schedAddRow({ days:win.days, start:win.start });
+    }else if (win.end && !win.start){
+      schedAddRow({ days:win.days, end:win.end   });
+    }else{
+      /* a fully-specified record: show both halves */
+      schedAddRow({ days:win.days, start:win.start });
+      schedAddRow({ days:win.days, end  :win.end   });
+    }
+  });
 }
 
 // Wire events once
-function schedInitOnce() {
-  var cb = document.getElementById('sched_enabled');
-  if (cb) cb.addEventListener('change', schedToggleUI);
+function schedInitOnce(){
+  var cb = document.getElementById("sched_enabled");
+  if (cb) cb.addEventListener("change", schedToggleUI);
+  /* no extra rows → hide the “add” button altogether */
+  // leave the button visible – every click adds another Start/End pair
 }
 
 function setsort(newfield) {
@@ -2449,20 +2524,12 @@ function FlexQoS_mod_apply() {
 	appdb_rulelist_array += appdb_last_rules;
 
 	// ---- Save schedule ----
-	if (document.getElementById('sched_enabled').checked) {
-  	var ser = schedSerialize();
-  	if (!ser.ok) {
-    	alert("Schedule has invalid values.\n• Pick at least one day\n• End time must be after start time");
-    	return;
-  	}
-  	custom_settings.flexqos_schedule = schedStringify({
-    	enabled: true,
-    	days: ser.win.days,
-    	start: ser.win.start,
-    	end:   ser.win.end
-  	});
-	} else {
-  	delete custom_settings.flexqos_schedule;
+	if (document.getElementById('sched_enabled').checked){
+		var ser = schedSerialize();
+		if (!ser.ok){ alert("Schedule error: " + ser.err); return; }
+		custom_settings.flexqos_schedule = ser.str;     // pipe-separated list
+	}else{
+		delete custom_settings.flexqos_schedule;
 	}
 	if (iptables_rulelist_array.length > 2999) {
 		alert("Total iptables rules exceeds 2999 bytes! Please delete or consolidate!");
