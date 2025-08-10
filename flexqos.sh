@@ -1091,51 +1091,20 @@ update() {
 	exit
 } # update
 
-qos_stop() {
-    # Stop Adaptive QoS cleanly (runtime only; no flash writes by default)
-    local cur_enable need_stop
-    logmsg "Stopping Adaptive QoS..."
-    need_stop=0
-
-    cur_enable="$(nvram get qos_enable 2>/dev/null)"
-    if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "0" ]; then
-        nvram set qos_enable=0
-        need_stop=1
-    fi
-
-    if [ "${need_stop}" = "1" ]; then
-        service stop_qos
-        # Only persist if explicitly requested
-        logmsg "Adaptive QoS stopped."
-    else
-        logmsg "Adaptive QoS already disabled; nothing to do."
-    fi
-}
-
-qos_start() {
-    local cur_type cur_enable need_start
-    # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
-    logmsg "Starting Adaptive QoS..."
-    need_start=0
-
-    cur_type="$(nvram get qos_type 2>/dev/null)"
-    if [ -n "${cur_type}" ] && [ "${cur_type}" != "1" ]; then
-        nvram set qos_type=1
-    fi
-
-    cur_enable="$(nvram get qos_enable 2>/dev/null)"
-    if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "1" ]; then
-        nvram set qos_enable=1
-        need_start=1
-    fi
-
-    if [ "${need_start}" = "1" ]; then
-        service start_qos
-        # Only persist if explicitly requested
-        logmsg "Adaptive QoS started."
-    else
-        logmsg "Adaptive QoS already running; nothing to do."
-    fi
+_flush_conntrack_{
+	if ! validate_iptables_rules; then
+		write_iptables_rules
+		iptables_static_rules 2>&1 | logger -t "${SCRIPTNAME_DISPLAY}"
+		if [ -s "/tmp/${SCRIPTNAME}_iprules" ]; then
+			logmsg "Applying iptables custom rules"
+			. "/tmp/${SCRIPTNAME}_iprules" 2>&1 | logger -t "${SCRIPTNAME_DISPLAY}"
+			if [ "$(am_settings_get "${SCRIPTNAME}"_conntrack)" != "0" ]; then
+				# Flush conntrack table so that existing connections will be processed by new iptables rules
+				logmsg "Flushing conntrack table"
+				/usr/sbin/conntrack -F conntrack >/dev/null 2>&1
+			fi
+		fi
+	fi
 }
 
 prompt_restart() {
@@ -1162,6 +1131,57 @@ prompt_restart() {
 	fi
 } # prompt_restart
 
+qos_stop() {
+    # Stop Adaptive QoS cleanly (runtime only; no flash writes by default)
+    local cur_enable need_stop
+    logmsg "Stopping Adaptive QoS..."
+    need_stop=0
+
+    cur_enable="$(nvram get qos_enable 2>/dev/null)"
+    if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "0" ]; then
+        nvram set qos_enable=0
+        need_stop=1
+    fi
+
+    if [ "${need_stop}" = "1" ]; then
+        service stop_qos
+        prompt_restart
+        _flush_conntrack_
+        # Only persist if explicitly requested
+        logmsg "Adaptive QoS stopped."
+    else
+        logmsg "Adaptive QoS already disabled; nothing to do."
+    fi
+}
+
+qos_start() {
+    local cur_type cur_enable need_start
+    # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
+    logmsg "Starting Adaptive QoS..."
+    need_start=0
+
+    cur_type="$(nvram get qos_type 2>/dev/null)"
+    if [ -n "${cur_type}" ] && [ "${cur_type}" != "1" ]; then
+        nvram set qos_type=1
+    fi
+
+    cur_enable="$(nvram get qos_enable 2>/dev/null)"
+    if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "1" ]; then
+        nvram set qos_enable=1
+        need_start=1
+    fi
+
+    if [ "${need_start}" = "1" ]; then
+        service start_qos
+        prompt_restart
+        _flush_conntrack_
+        # Only persist if explicitly requested
+        logmsg "Adaptive QoS started."
+    else
+        logmsg "Adaptive QoS already running; nothing to do."
+    fi
+}
+
 ##### QoS Disable Window Scheduler (guided + custom) ###########################
 
 QOS_CRON_OFF="${SCRIPTNAME}_qosoff"
@@ -1171,9 +1191,7 @@ SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
 # --- helpers ---------------------------------------------------------------
 _qs_trim() { printf "%s" "$1" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//' | tr -d '\r'; }
 _qs_to_dec() { printf '%s\n' "${1:-0}" | awk '{print $1+0}'; }
-_qs_hm() {
-    printf "%02d:%02d" "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"
-}
+_qs_hm() { printf "%02d:%02d" "$(_qs_to_dec "$1")" "$(_qs_to_dec "$2")"; }
 _qs_int() { printf '%d' "$(_qs_to_dec "$1")"; }
 
 _qs_duration_min() {
@@ -2128,19 +2146,7 @@ startup() {
 		;;
 	esac
 
-	if ! validate_iptables_rules; then
-		write_iptables_rules
-		iptables_static_rules 2>&1 | logger -t "${SCRIPTNAME_DISPLAY}"
-		if [ -s "/tmp/${SCRIPTNAME}_iprules" ]; then
-			logmsg "Applying iptables custom rules"
-			. "/tmp/${SCRIPTNAME}_iprules" 2>&1 | logger -t "${SCRIPTNAME_DISPLAY}"
-			if [ "$(am_settings_get "${SCRIPTNAME}"_conntrack)" != "0" ]; then
-				# Flush conntrack table so that existing connections will be processed by new iptables rules
-				logmsg "Flushing conntrack table"
-				/usr/sbin/conntrack -F conntrack >/dev/null 2>&1
-			fi
-		fi
-	fi
+	_flush_conntrack_
 
 	cru d "${SCRIPTNAME}"_5min 2>/dev/null
 	sleepdelay=0
