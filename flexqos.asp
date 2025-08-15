@@ -557,46 +557,16 @@ function draw_conntrack_table() {
 	updateTable();
 }
 
-// ---- SCHEDULER UI ----
+// ---- SCHEDULER UI (AppDB-like add/edit/remove) ----
 var SCHED_DAYS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
-
-// One source of truth for UI defaults
 var SCHED_DEFAULT = { days:[1,2,3,4,5], start:"07:00", end:"20:00" };
+var SCHED_MAX = 6;
 
-// Fallback if inputs are blank (used when reading the form)
-var SCHED_INPUT_FALLBACK = { start:"07:00", end:"20:00" };
+// Internal array of windows: [{days:[0-6], start:"HH:MM", end:"HH:MM"}]
+var SCHED = [];
 
-// Build a <tr> for one schedule window
-function schedRowHtml(win, idx){
-  win = Object.assign({}, SCHED_DEFAULT, win || {});
-  var daysHtml = "";
-  for (var d = 0; d < 7; d++){
-    var checked = (win.days.indexOf(d) >= 0) ? "checked" : "";
-    daysHtml += '<label class="sched-day"><input type="checkbox" class="sched-daycb" data-day="'+d+'" '+checked+'> '+SCHED_DAYS[d]+'</label>';
-  }
-
-  /* keep four visible cells so columns stay aligned            *
-   * – row-0 shows only Start                                  *
-   * – row-1 shows only End                                    */
-  var startCell, endCell;
-  if (idx === 0){                    /* Start row */
-      startCell = '<td><input type="time" class="sched-time sched-start" value="'+win.start+'"></td>';
-      /* blank cell but keep hidden value for serializer */
-      endCell   = '<td>&nbsp;<input type="hidden" class="sched-time sched-end" value="'+win.end+'"></td>';
-  }else{                             /* End row   */
-      /* blank cell but keep hidden value for serializer */
-      startCell = '<td>&nbsp;<input type="hidden" class="sched-time sched-start" value="'+win.start+'"></td>';
-      endCell   = '<td><input type="time" class="sched-time sched-end" value="'+win.end+'"></td>';
-  }
-
-  /* the last <td> kept only for layout — no minus button */
-  return (
-    '<tr data-row="'+idx+'">' +
-      '<td>'+ daysHtml +'</td>' +
-      startCell + endCell +
-    '</tr>'
-  );
-}
+// ---------- helpers ----------
+function _sched_trim(s){ return (s||"").toString().trim(); }
 
 function parseDaysSpec(spec){
   if (typeof spec !== "string") return [];
@@ -627,159 +597,188 @@ function stringifyDays(days){
   var uniq = Array.from(new Set((days||[]).map(function(n){ return parseInt(n,10); })))
                    .filter(function(n){ return n >= 0 && n <= 6; })
                    .sort(function(a,b){ return a - b; });
-  return (uniq.length === 7) ? "0-6" : uniq.join(",");
+  if (uniq.length === 7) return "0-6";
+  return uniq.join(",");
 }
 
+function labelDays(days){
+  var a = (days||[]).slice().sort(function(x,y){return x-y;});
+  var all = "Every day", wk = [1,2,3,4,5].toString(), we = [0,6].toString();
+  if (a.length === 7) return all;
+  if (a.toString() === wk) return "Weekdays (Mo–Fr)";
+  if (a.toString() === we) return "Weekends (Su,Sa)";
+  return a.map(function(d){ return SCHED_DAYS[d]; }).join(", ");
+}
+
+function timeValid(hm){
+  return /^[0-2]\d:[0-5]\d$/.test(hm) && parseInt(hm.substr(0,2),10) < 24;
+}
+
+// Parse one record string (“<1>DOW>HH:MM>HH:MM” or 3-part)
 function schedParse(str){
   if (typeof str !== "string" || !str.trim()) return null;
-
-  const p = str.replace(/^</,"").replace(/>$/,"").split(">");  // drop wrappers
-  if (p.length < 3 || p.length > 4) return null;               // guard rails
-
-  const obj = {
-    enabled : (p[0] === "1"),
-    days    : parseDaysSpec(p[1])
-  };
-
-  if (p.length === 3){                 // <1>{days}{time}
-    // Decide whether this is a start-only or end-only record
-    // We treat 00:00 or blank on purpose as “start”.
-    obj.start = p[2];
-  }else{                               // <1>{days}{start}{end}
-    obj.start = p[2];
-    obj.end   = p[3];
+  var s = str.replace(/^</,"").replace(/>$/,"").split(">");
+  if (s.length < 3 || s.length > 4) return null;
+  var en = (s[0] === "1");
+  var days = parseDaysSpec(s[1]);
+  var o = { enabled: en, days: days };
+  if (s.length === 4){ o.start = s[2]; o.end = s[3]; }
+  else { // 3-part, treat as start-only (“start” OR “end”)
+    // Decide by position we saved in the past; to be safe, accept either:
+    if (timeValid(s[2])) o.start = s[2]; else o.end = s[2];
   }
-  return obj;
+  return o;
 }
 
-function schedStringify(o){
-  const enabled = o.enabled ? "1" : "0";
-  const days    = stringifyDays(o.days || []);
-
-  const parts = [enabled, days];          // always these two
-
-  if (o.hasOwnProperty("start")) parts.push(o.start || "");
-  if (o.hasOwnProperty("end"))   parts.push(o.end   || "");
-
-  return "<" + parts.join(">") + ">";
+// Stringify one full window record
+function schedStringify(win){
+  return "<1>" + stringifyDays(win.days) + ">" + (win.start||"") + ">" + (win.end||"");
 }
 
-function schedAddRow(win){
-   var tbody = document.getElementById("sched_tbody");
-
-   /* two rows (Start & End) are already present → nothing to add */
-   /* stop somewhere sensible – six windows = 12 rows */
-   if (tbody.children.length >= 12) return;
-
-   var idx   = tbody.children.length;
-   var tmp   = document.createElement("tbody");
-   tmp.innerHTML = schedRowHtml(win, idx);
-   tbody.appendChild(tmp.firstElementChild);
-
-  /* The old “+” button is gone; guard against null */
-  if (tbody.children.length >= 2){
-    var plus = document.getElementById("sched_add_btn");
-    if (plus) plus.disabled = true;
-  }
-}
-
-function schedReadRow(tr){
+// ---------- UI readers/writers ----------
+function sched_read_add_form(){
   var days = [];
-  tr.querySelectorAll(".sched-daycb").forEach(function(cb){
-    if (cb.checked) days.push(parseInt(cb.getAttribute("data-day"),10));
-  });
-  var start = tr.querySelector(".sched-start").value || SCHED_FALLBACK.start;
-  var end   = tr.querySelector(".sched-end").value   || SCHED_FALLBACK.end;
-  return { days:days, start:start, end:end, enabled:true };
+  for (var d = 0; d <= 6; d++)
+    if (document.getElementById("sched_new_day_"+d).checked) days.push(d);
+
+  var start = _sched_trim(document.getElementById("sched_new_start").value || "07:00");
+  var end   = _sched_trim(document.getElementById("sched_new_end").value   || "20:00");
+
+  return { days: days, start: start, end: end };
 }
 
-function timeToMinutes(hm){
-  var s = hm.split(":"); return parseInt(s[0],10)*60 + parseInt(s[1],10);
+function sched_clear_add_form(){
+  // don’t reset times (nice UX); just clear days
+  for (var d = 0; d <= 6; d++)
+    document.getElementById("sched_new_day_"+d).checked = false;
 }
 
-// Validate all rows; returns {ok:boolean, windows:[...]}
-function schedSerialize () {
-  const rows = document.querySelectorAll("#sched_tbody tr");
-  if (rows.length % 2 !== 0){
-    return { ok:false, err:"Start/End rows must be in pairs", str:"" };
-  }
+// ---------- CRUD ----------
+function sched_add_window(){
+  if (SCHED.length >= SCHED_MAX) { alert("This table only allows " + SCHED_MAX + " items!"); return; }
 
-  const blocks = [];
+  var win = sched_read_add_form();
+  if (!win.days.length) { alert("Please select at least one day."); return; }
+  if (!timeValid(win.start) || !timeValid(win.end)) { alert("Please enter valid HH:MM times."); return; }
 
-  for (let i = 0; i < rows.length; i += 2){
-    const s = schedReadRow(rows[i]);       // start-row
-    const e = schedReadRow(rows[i+1]);     // end-row
+  SCHED.push(win);
+  sched_render_rules();
+  sched_clear_add_form();
+}
 
-    if (!s.days.length || !e.days.length){
-      return { ok:false,
-               err:"Each window needs days ticked on BOTH rows",
-               str:"" };
+function sched_remove_row(btn){
+  var i = btn.parentNode.parentNode.rowIndex; // header is row 0
+  // Adjust because we render into an inner table; resolve index robustly:
+  var tr = btn.closest("tr");
+  var idx = parseInt(tr.getAttribute("data-idx"), 10);
+  if (!isNaN(idx)) { SCHED.splice(idx,1); sched_render_rules(); }
+}
+
+function sched_edit_row(btn){
+  var tr  = btn.closest("tr");
+  var idx = parseInt(tr.getAttribute("data-idx"), 10);
+  if (isNaN(idx)) return;
+  var win = SCHED[idx];
+
+  // Fill the “add row” with values
+  for (var d = 0; d <= 6; d++)
+    document.getElementById("sched_new_day_"+d).checked = (win.days.indexOf(d) >= 0);
+  document.getElementById("sched_new_start").value = win.start;
+  document.getElementById("sched_new_end").value   = win.end;
+
+  // Remove current row (same as AppDB edit UX)
+  SCHED.splice(idx,1);
+  sched_render_rules();
+}
+
+// ---------- rendering ----------
+function sched_render_rules(){
+  var code = '<table width="100%" border="1" cellspacing="0" cellpadding="4" class="list_table" id="sched_rulelist_table">';
+  if (!SCHED.length){
+    code += '<tr><td style="color:#FFCC00;" colspan="4">No schedules defined</td></tr>';
+  }else{
+    for (var i=0; i<SCHED.length; i++){
+      var w = SCHED[i];
+      code += '<tr data-idx="'+i+'">';
+      code +=   '<td width="50%">'+ labelDays(w.days) +'</td>';
+      code +=   '<td width="16%">'+ w.start +'</td>';
+      code +=   '<td width="16%">'+ w.end   +'</td>';
+      code +=   '<td width="18%"><input class="edit_btn"   onclick="sched_edit_row(this);" value=""/>';
+      code +=                     '<input class="remove_btn" onclick="sched_remove_row(this);" value=""/></td>';
+      code += '</tr>';
     }
-
-    blocks.push( schedStringify({
-      enabled : true,
-      days    : s.days,
-      start   : s.start          // end intentionally omitted
-    }));
-
-    blocks.push( schedStringify({
-      enabled : true,
-      days    : e.days,
-      end     : e.end            // start intentionally omitted
-    }));
   }
-
-  return { ok:true, err:"", str:blocks.join("|") };
+  code += '</table>';
+  document.getElementById("sched_rules_block").innerHTML = code;
 }
 
-// Show/Hide block on toggle
+// ---------- enable/seed ----------
 function schedToggleUI(){
-  const on = document.getElementById("sched_enabled").checked;
-  document.getElementById("sched_block").style.display = on ? "" : "none";
+  var cb    = document.getElementById("sched_enabled");
+  var block = document.getElementById("sched_block");
+  if (!cb || !block) return;             // guards
 
-  /* —---- Auto-seed one default window (Mo-Fr 07:00-20:00) ----- */
-  if (on &&
-      !document.getElementById("sched_tbody").children.length &&
-      !(custom_settings.flexqos_schedule || "").trim()            // <-- new
-  ){
-      // row 0  → Start   (07:00)
-      schedAddRow({ days:[1,2,3,4,5], start:"07:00" });
-      // row 1  → End     (20:00)
-      schedAddRow({ days:[1,2,3,4,5], end  :"20:00" });
+  block.style.display = cb.checked ? "" : "none";
+
+  // Auto-seed a default entry only for the new AppDB-style UI
+  if (cb.checked){
+    if (typeof SCHED !== "undefined" &&
+        Array.isArray(SCHED) &&
+        SCHED.length === 0 &&
+        !( (custom_settings.flexqos_schedule || "").trim() ) ) {
+
+      SCHED.push({ days:[1,2,3,4,5], start:"07:00", end:"20:00" });
+      if (typeof sched_render_rules === "function") sched_render_rules();
+    }
   }
 }
 
-// Populate UI from custom_settings.flexqos_schedule
-function schedPopulateFromSettings(){
-  const raw = (custom_settings.flexqos_schedule || "").trim();
-  if (!raw) return;                       // nothing stored yet
-
-  document.getElementById("sched_enabled").checked = true;
-  schedToggleUI();
-
-  raw.split("|").forEach(part => {
-    const win = schedParse(part);
-    if (!win) return;
-
-    /* decide which cell (Start / End) this record belongs to */
-    if (win.start && !win.end){
-      schedAddRow({ days:win.days, start:win.start });
-    }else if (win.end && !win.start){
-      schedAddRow({ days:win.days, end:win.end   });
-    }else{
-      /* a fully-specified record: show both halves */
-      schedAddRow({ days:win.days, start:win.start });
-      schedAddRow({ days:win.days, end  :win.end   });
-    }
-  });
-}
-
-// Wire events once
 function schedInitOnce(){
   var cb = document.getElementById("sched_enabled");
   if (cb) cb.addEventListener("change", schedToggleUI);
-  /* no extra rows → hide the “add” button altogether */
-  // leave the button visible – every click adds another Start/End pair
+}
+
+// Load from saved settings into SCHED and render
+function schedPopulateFromSettings(){
+  SCHED = [];
+  var raw = _sched_trim(custom_settings.flexqos_schedule || "");
+  if (raw){
+    // Accept both 4-part windows and old paired 3-part records
+    var parts = raw.split("|");
+    var pairmap = Object.create(null); // key: days-spec → {start?, end?}
+    parts.forEach(function(p){
+      var rec = schedParse(p);
+      if (!rec || !rec.enabled) return;
+      var key = stringifyDays(rec.days);
+      if (rec.start && rec.end){
+        SCHED.push({days:rec.days, start:rec.start, end:rec.end});
+      }else{
+        pairmap[key] = pairmap[key] || {days:rec.days};
+        if (rec.start) pairmap[key].start = rec.start;
+        if (rec.end)   pairmap[key].end   = rec.end;
+      }
+    });
+    Object.keys(pairmap).forEach(function(k){
+      var r = pairmap[k];
+      if (r.start || r.end){
+        SCHED.push({days:r.days, start:r.start || "00:00", end:r.end || "00:00"});
+      }
+    });
+
+    document.getElementById("sched_enabled").checked = true;
+    schedToggleUI();
+  }
+  sched_render_rules();
+}
+
+// Serialize SCHED for saving
+function schedSerialize(){
+  if (!SCHED.length) return "";
+  var out = [];
+  for (var i=0;i<SCHED.length;i++){
+    out.push( schedStringify(SCHED[i]) );
+  }
+  return out.join("|");
 }
 
 function setsort(newfield) {
@@ -2525,11 +2524,11 @@ function FlexQoS_mod_apply() {
 
 	// ---- Save schedule ----
 	if (document.getElementById('sched_enabled').checked){
-		var ser = schedSerialize();
-		if (!ser.ok){ alert("Schedule error: " + ser.err); return; }
-		custom_settings.flexqos_schedule = ser.str;     // pipe-separated list
+  		var ser = schedSerialize(); // returns pipe-separated "<1>DOW>HH:MM>HH:MM"
+  		if (!ser){ alert("No schedules defined."); return; }
+  		custom_settings.flexqos_schedule = ser;
 	}else{
-		delete custom_settings.flexqos_schedule;
+  		delete custom_settings.flexqos_schedule;
 	}
 	if (iptables_rulelist_array.length > 2999) {
 		alert("Total iptables rules exceeds 2999 bytes! Please delete or consolidate!");
@@ -3076,24 +3075,53 @@ function DelCookie(cookiename){
 		</td>
 	</tr>
 	<tr>
-  		<th>Schedule</th>
-  		<td>
-    		<label>
-      		<input type="checkbox" id="sched_enabled"> Enable
-    		</label>
-    		<div id="sched_block" style="margin-top:8px; display:none;">
-      		<table width="100%" border="1" cellspacing="0" cellpadding="4" class="FormTable_table">
-        		<thead>
-          		<tr>
-            		<th style="width:50%;">Days</th>
-            		<th style="width:25%;">Start</th>
-            		<th style="width:25%;">End</th>
-          		</tr>
-        		</thead>
-        		<tbody id="sched_tbody"></tbody>
-      		</table>
-    		</div>
-  		</td>
+  	<th>Schedule</th>
+  	<td>
+    	<label>
+      	<input type="checkbox" id="sched_enabled"> Enable
+    	</label>
+
+    	<div id="sched_block" style="margin-top:8px; display:none;">
+
+      	<!-- Add Row -->
+      	<table width="100%" border="1" cellspacing="0" cellpadding="4" class="FormTable_table">
+        	<thead>
+          	<tr>
+            	<td colspan="4">Schedules&nbsp;(Max Limit : 6)</td>
+          	</tr>
+        	</thead>
+        	<tbody>
+          	<tr>
+            	<th width="50%">Days</th>
+            	<th width="16%">Start</th>
+            	<th width="16%">End</th>
+            	<th width="18%">Edit</th>
+          	</tr>
+          	<tr>
+            	<td>
+              	<div class="sched-day">
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_0"> Su</label>
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_1"> Mo</label>
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_2"> Tu</label>
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_3"> We</label>
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_4"> Th</label>
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_5"> Fr</label>
+                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_6"> Sa</label>
+              	</div>
+            	</td>
+            	<td><input id="sched_new_start" type="time" class="input_6_table" value="07:00"></td>
+            	<td><input id="sched_new_end"   type="time" class="input_6_table" value="20:00"></td>
+            	<td>
+              	<div><input type="button" id="sched_add_btn" class="add_btn" onclick="sched_add_window();" value=""></div>
+            	</td>
+          	</tr>
+        	</tbody>
+      	</table>
+
+      	<!-- Existing windows list -->
+      	<div id="sched_rules_block" style="margin-top:8px;"></div>
+    	</div>
+  	</td>
 	</tr>
 	<tr>
 		<th><a class="hintstyle" href="javascript:void(0);" onClick="openHint('FlexQoS',4);">Router/VPN Client Outbound Traffic Class</th>
