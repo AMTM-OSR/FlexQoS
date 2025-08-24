@@ -1250,21 +1250,28 @@ _qs_clear_jobs() {
 _qs_apply_jobs() {
     _qs_clear_jobs
     local n=0 aligned=0 rec en rest dow st et sh sm eh em out ok
-    [ -n "$SCHEDULE" ] || { [ "$aligned" = 1 ] && qos_start || qos_stop; return; }
+
+    # If there are no schedules, just clear cron and LEAVE QoS AS-IS.
+    # (Prevents unexpected qos_stop when the last schedule is deleted.)
+    if [ -z "$SCHEDULE" ]; then
+        # Optional: logmsg "No QoS schedules configured; leaving QoS state unchanged."
+        return 0
+    fi
 
     local OLDIFS="$IFS"; IFS='|'
     for rec in $SCHEDULE; do
         rec="${rec#<}"; rec="${rec%>}"
         en="${rec%%>*}"; rest="${rec#*>}"
         dow="${rest%%>*}"; rest="${rest#*>}"
-        st="${rest%%>*}"; et=""; case "$rest" in *'>'*) et="${rest#*>}" ;; esac
+        st="${rest%%>*}"; et=""
+        case "$rest" in *'>'*) et="${rest#*>}" ;; esac
         [ "$en" = "1" ] || continue
 
         ok=1
         out="$(_qs_parse_time "$st")" || ok=0
-        [ "$ok" = 1 ] && { set -- $out; sh=$(_qs_to_dec "$1"); sm=$(_qs_to_dec "$2"); }
+        if [ "$ok" = 1 ]; then set -- $out; sh=$(_qs_to_dec "$1"); sm=$(_qs_to_dec "$2"); fi
         out="$(_qs_parse_time "$et")" || ok=0
-        [ "$ok" = 1 ] && { set -- $out; eh=$(_qs_to_dec "$1"); em=$(_qs_to_dec "$2"); }
+        if [ "$ok" = 1 ]; then set -- $out; eh=$(_qs_to_dec "$1"); em=$(_qs_to_dec "$2"); fi
         [ "$ok" = 1 ] || continue
 
         n=$((n+1)); cru a "${QOS_CRON_ON}_${n}"  "$(printf '%d %d * * %s %s -qosstart' "$sm" "$sh" "$dow" "$SCRIPTPATH")"
@@ -1274,6 +1281,7 @@ _qs_apply_jobs() {
     done
     IFS="$OLDIFS"
 
+    # Apply immediate state based on whether we are currently in any active window.
     [ "$aligned" = 1 ] && qos_start || qos_stop
 }
 
@@ -1538,7 +1546,7 @@ _qs_delete_single() {
     SCHEDULE="$new"
     am_settings_set "${SCRIPTNAME}"_schedule "$SCHEDULE"
 
-    _qs_apply_jobs
+    qos_schedule_apply_from_config
     printf "Deleted and applied.\n" >&2
 }
 
