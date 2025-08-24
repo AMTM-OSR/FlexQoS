@@ -1254,7 +1254,6 @@ _qs_apply_jobs() {
     # If there are no schedules, just clear cron and LEAVE QoS AS-IS.
     # (Prevents unexpected qos_stop when the last schedule is deleted.)
     if [ -z "$SCHEDULE" ]; then
-        # Optional: logmsg "No QoS schedules configured; leaving QoS state unchanged."
         return 0
     fi
 
