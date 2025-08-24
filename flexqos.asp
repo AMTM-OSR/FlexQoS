@@ -716,21 +716,10 @@ function sched_render_rules(){
 function schedToggleUI(){
   var cb    = document.getElementById("sched_enabled");
   var block = document.getElementById("sched_block");
-  if (!cb || !block) return;             // guards
+  if (!cb || !block) return;
 
   block.style.display = cb.checked ? "" : "none";
-
-  // Auto-seed a default entry only for the new AppDB-style UI
-  if (cb.checked){
-    if (typeof SCHED !== "undefined" &&
-        Array.isArray(SCHED) &&
-        SCHED.length === 0 &&
-        !( (custom_settings.flexqos_schedule || "").trim() ) ) {
-
-      SCHED.push({ days:[1,2,3,4,5], start:"07:00", end:"20:00" });
-      if (typeof sched_render_rules === "function") sched_render_rules();
-    }
-  }
+  if (typeof sched_render_rules === "function") sched_render_rules();
 }
 
 function schedInitOnce(){
