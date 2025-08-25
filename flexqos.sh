@@ -1572,7 +1572,7 @@ qos_schedule_menu() {
         if [ -z "$lines" ]; then printf "  (none)\n"; else printf "%s\n" "$lines" | sed 's/^/  /'; fi
 
         printf "\nChoose an option:\n"
-        printf "  1) Create schedules (guided)\n"
+        printf "  1) Create schedules (Guided)\n"
         if [ "$has_any" -eq 1 ]; then
             printf "  2) Add a schedule\n"
             printf "  3) Edit a schedule\n"
@@ -1588,7 +1588,7 @@ qos_schedule_menu() {
             1) _qs_guided_multi ;;
             2)
                if [ "$has_any" -eq 1 ]; then _qs_add_single
-               else printf "Invalid selection. No schedules yet; use 'Create schedules (guided)' first.\n"; fi
+               else printf "Invalid selection. No schedules yet; use 'Create schedules (Guided)' first.\n"; fi
             ;;
             3)
                if [ "$has_any" -eq 1 ]; then _qs_edit_single

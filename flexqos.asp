@@ -701,9 +701,9 @@ function sched_render_rules(){
       var w = SCHED[i];
       code += '<tr data-idx="'+i+'">';
       code +=   '<td width="50%">'+ labelDays(w.days) +'</td>';
-      code +=   '<td width="16%">'+ w.start +'</td>';
-      code +=   '<td width="16%">'+ w.end   +'</td>';
-      code +=   '<td width="18%"><input class="edit_btn"   onclick="sched_edit_row(this);" value=""/>';
+      code +=   '<td width="18%">'+ w.start +'</td>';
+      code +=   '<td width="18%">'+ w.end   +'</td>';
+      code +=   '<td width="14%"><input class="edit_btn"   onclick="sched_edit_row(this);" value=""/>';
       code +=                     '<input class="remove_btn" onclick="sched_remove_row(this);" value=""/></td>';
       code += '</tr>';
     }
@@ -714,11 +714,14 @@ function sched_render_rules(){
 
 // ---------- enable/seed ----------
 function schedToggleUI(){
-  var cb    = document.getElementById("sched_enabled");
-  var block = document.getElementById("sched_block");
-  if (!cb || !block) return;
+  var cb = document.getElementById("sched_enabled");
+  var block = document.getElementById("sched_block");        // legacy container (may not exist)
+  var row   = document.getElementById("sched_block_row");    // new full-width row
+  var on = cb && cb.checked;
 
-  block.style.display = cb.checked ? "" : "none";
+  if (block) block.style.display = on ? "" : "none";
+  if (row)   row.style.display   = on ? "" : "none";
+
   if (typeof sched_render_rules === "function") sched_render_rules();
 }
 
@@ -3064,55 +3067,6 @@ function DelCookie(cookiename){
 		</td>
 	</tr>
 	<tr>
-  	<th>Schedule</th>
-  	<td>
-    	<label>
-      	<input type="checkbox" id="sched_enabled"> Enable
-    	</label>
-
-    	<div id="sched_block" style="margin-top:8px; display:none;">
-
-      	<!-- Add Row -->
-      	<table width="100%" border="1" cellspacing="0" cellpadding="4" class="FormTable_table">
-        	<thead>
-          	<tr>
-            	<td colspan="4">Schedules&nbsp;(Max Limit : 6)</td>
-          	</tr>
-        	</thead>
-        	<tbody>
-          	<tr>
-            	<th width="50%">Days</th>
-            	<th width="16%">Start</th>
-            	<th width="16%">End</th>
-            	<th width="18%">Edit</th>
-          	</tr>
-          	<tr>
-            	<td>
-              	<div class="sched-day">
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_0"> Su</label>
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_1"> Mo</label>
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_2"> Tu</label>
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_3"> We</label>
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_4"> Th</label>
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_5"> Fr</label>
-                	<label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_6"> Sa</label>
-              	</div>
-            	</td>
-            	<td><input id="sched_new_start" type="time" class="input_6_table" value="07:00"></td>
-            	<td><input id="sched_new_end"   type="time" class="input_6_table" value="20:00"></td>
-            	<td>
-              	<div><input type="button" id="sched_add_btn" class="add_btn" onclick="sched_add_window();" value=""></div>
-            	</td>
-          	</tr>
-        	</tbody>
-      	</table>
-
-      	<!-- Existing windows list -->
-      	<div id="sched_rules_block" style="margin-top:8px;"></div>
-    	</div>
-  	</td>
-	</tr>
-	<tr>
 		<th><a class="hintstyle" href="javascript:void(0);" onClick="openHint('FlexQoS',4);">Router/VPN Client Outbound Traffic Class</th>
 		<td>
 			<select name="flexqos_outputcls" id="flexqos_outputcls" class="input_option">
@@ -3128,6 +3082,66 @@ function DelCookie(cookiename){
 		</td>
 	</tr>
 </table>
+<!-- Schedules (full-width section) -->
+<table width="100%" border="1" align="center" cellpadding="4" cellspacing="0"
+       class="FormTable_table" id="sched_section" style="margin-top:10px;">
+  <thead>
+    <tr>
+      <td colspan="4">
+        QoS Schedules&nbsp;(Max Limit : 6)
+        <span style="float:right; font-weight:normal;">
+          <label style="cursor:pointer;">
+            <input type="checkbox" id="sched_enabled"> Enable
+          </label>
+        </span>
+      </td>
+    </tr>
+  </thead>
+  <tbody>
+    <tr id="sched_block_row" style="display:none;">
+      <td colspan="4">
+        <!-- Add Row -->
+        <table width="100%" border="1" cellspacing="0" cellpadding="4" class="FormTable_table">
+          <thead>
+            <tr>
+              <td colspan="4">Add schedule window</td>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th width="50%">Days</th>
+              <th width="18%">Start</th>
+              <th width="18%">End</th>
+              <th width="14%">Edit</th>
+            </tr>
+            <tr>
+              <td>
+                <div class="sched-day">
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_0"> Su</label>
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_1"> Mo</label>
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_2"> Tu</label>
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_3"> We</label>
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_4"> Th</label>
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_5"> Fr</label>
+                  <label class="sched-day"><input type="checkbox" class="sched-daycb" id="sched_new_day_6"> Sa</label>
+                </div>
+              </td>
+              <td><input id="sched_new_start" type="time" class="input_6_table" value="07:00" style="width: 100px; margin-left: 10px;"></td>
+              <td><input id="sched_new_end"   type="time" class="input_6_table" value="20:00" style="width: 100px; margin-left: 10px;"></td>
+              <td>
+                <div><input type="button" id="sched_add_btn" class="add_btn" onclick="sched_add_window();" value=""></div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Existing windows list -->
+        <div id="sched_rules_block" style="margin-top:10px;"></div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
 <div id="iptables_rules_block"></div>
 
 <table width="100%" border="1" align="center" cellpadding="4" cellspacing="0" class="FormTable_table">
