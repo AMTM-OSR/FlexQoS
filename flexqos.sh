@@ -1249,38 +1249,49 @@ _qs_clear_jobs() {
 
 _qs_apply_jobs() {
     _qs_clear_jobs
-    local n=0 aligned=0 rec en rest dow st et sh sm eh em out ok
+    local n=0 aligned=0 rec en rest dow st et sh sm eh em sh_s sm_s eh_s em_s out ok
 
-    # If there are no schedules, just clear cron and LEAVE QoS AS-IS.
-    # (Prevents unexpected qos_stop when the last schedule is deleted.)
-    if [ -z "$SCHEDULE" ]; then
-        return 0
-    fi
+    # No schedules? Clear cron and LEAVE QoS state as-is.
+    [ -z "$SCHEDULE" ] && return 0
 
     local OLDIFS="$IFS"; IFS='|'
     for rec in $SCHEDULE; do
         rec="${rec#<}"; rec="${rec%>}"
+
         en="${rec%%>*}"; rest="${rec#*>}"
         dow="${rest%%>*}"; rest="${rest#*>}"
-        st="${rest%%>*}"; et=""
-        case "$rest" in *'>'*) et="${rest#*>}" ;; esac
+        st="${rest%%>*}"; et=""; case "$rest" in *'>'*) et="${rest#*>}" ;; esac
+
         [ "$en" = "1" ] || continue
 
+        # Validate times using the parser, but build the actual cron fields
+        # from the raw HH:MM strings to avoid any numeric re-interpretation.
         ok=1
         out="$(_qs_parse_time "$st")" || ok=0
-        if [ "$ok" = 1 ]; then set -- $out; sh=$(_qs_to_dec "$1"); sm=$(_qs_to_dec "$2"); fi
         out="$(_qs_parse_time "$et")" || ok=0
-        if [ "$ok" = 1 ]; then set -- $out; eh=$(_qs_to_dec "$1"); em=$(_qs_to_dec "$2"); fi
         [ "$ok" = 1 ] || continue
 
-        n=$((n+1)); cru a "${QOS_CRON_ON}_${n}"  "$(printf '%d %d * * %s %s -qosstart' "$sm" "$sh" "$dow" "$SCRIPTPATH")"
-        n=$((n+1)); cru a "${QOS_CRON_OFF}_${n}" "$(printf '%d %d * * %s %s -qosstop'  "$em" "$eh" "$dow" "$SCRIPTPATH")"
+        # Raw split (keeps "07" vs "7" exactly as entered)
+        sh_s="${st%%:*}"; sm_s="${st#*:}"; [ "$st" = "$sh_s" ] && sm_s="0"
+        eh_s="${et%%:*}"; em_s="${et#*:}"; [ "$et" = "$eh_s" ] && em_s="0"
 
+        # Trim any whitespace/CR just in case
+        sh_s="$(_qs_trim "$sh_s")"; sm_s="$(_qs_trim "$sm_s")"
+        eh_s="$(_qs_trim "$eh_s")"; em_s="$(_qs_trim "$em_s")"
+
+        # Numeric forms for comparisons (no base-8 surprises)
+        sh="$(_qs_to_dec "$sh_s")"; sm="$(_qs_to_dec "$sm_s")"
+        eh="$(_qs_to_dec "$eh_s")"; em="$(_qs_to_dec "$em_s")"
+
+        # Add cron jobs using *separate arguments* (most robust with cru)
+        n=$((n+1)); cru a "${QOS_CRON_ON}_${n}"  "$sm" "$sh" "*" "*" "$dow" "$SCRIPTPATH" -qosstart
+        n=$((n+1)); cru a "${QOS_CRON_OFF}_${n}" "$em" "$eh" "*" "*" "$dow" "$SCRIPTPATH" -qosstop
+
+        # Align immediate state
         if _qs_now_in_window "$sh" "$sm" "$eh" "$em" "$dow"; then aligned=1; fi
     done
     IFS="$OLDIFS"
 
-    # Apply immediate state based on whether we are currently in any active window.
     [ "$aligned" = 1 ] && qos_start || qos_stop
 }
 
@@ -1398,9 +1409,10 @@ _qs_guided_multi() {
     local count c
     while :; do
         c="$(_qs_prompt 'How many schedules would you like to create? (1-6)' '2')" || return 1
-        count="$(_qs_to_dec "$c")"
-        if [ "$count" -ge 1 ] && [ "$count" -le 6 ]; then break; fi
-        printf "Please enter a number between 1 and 6.\n" >&2
+        case "$c" in
+            1|2|3|4|5|6) count="$c"; break ;;
+            *)           printf "Please enter a number between 1 and 6.\n" >&2 ;;
+        esac
     done
 
     local i dow sh sm eh em out t new_sched="" def_start="07:00" def_end="20:00"
@@ -1420,7 +1432,8 @@ _qs_guided_multi() {
             printf "Invalid time - hours 0-23, minutes 0-59.\n" >&2
         done
 
-        def_start="$(_qs_hm "$sh" "$sm")"; def_end="$(_qs_hm "$eh" "$em")"
+        def_start="$(_qs_hm "$sh" "$sm")"
+        def_end="$(_qs_hm "$eh" "$em")"
         rec="<1>${dow}>$(_qs_hm "$sh" "$sm")>$(_qs_hm "$eh" "$em")"
         [ -n "$new_sched" ] && new_sched="${new_sched}|${rec}" || new_sched="${rec}"
         i=$(( i + 1 ))
