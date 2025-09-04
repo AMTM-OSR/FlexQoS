@@ -1,6 +1,6 @@
 v1.4.8 (18-May-2025)
   - CHANGED: Changed Soft Warning for Hard Block on WiFi 7 devices as per dave and RMerlin conversation here: https://www.snbforums.com/threads/asuswrt-merlin-3006-102-5-beta-is-now-available.95115/post-961105
-  - CHANGED: Added a force uninstall for routers with FlexQoS installed on 3004 F/W while upgrading to 3006 F/W
+  - CHANGED: Added a force uninstall for routers with FlexQoS installed on BE devixes while rebooting/startup.
 
 v1.4.7 (15-June-2025)
   - CHANGED: Re-enable develop branch for script development.
