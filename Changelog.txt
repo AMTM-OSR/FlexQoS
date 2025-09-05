@@ -1,6 +1,9 @@
+v1.4.9 (04-Sep-2025)
+  - NEW: Includes Flexible/Dynamic Scheduling of the QoS system on ASUS routers. As requested here: https://www.snbforums.com/threads/flexqos-1-4-8-flexible-qos-enhancement-script-for-adaptive-qos.94976/post-964632
+
 v1.4.8 (18-May-2025)
   - CHANGED: Changed Soft Warning for Hard Block on WiFi 7 devices as per dave and RMerlin conversation here: https://www.snbforums.com/threads/asuswrt-merlin-3006-102-5-beta-is-now-available.95115/post-961105
-  - CHANGED: Added a force uninstall for routers with FlexQoS installed on BE devixes while rebooting/startup.
+  - CHANGED: Added a force uninstall for routers with FlexQoS installed on BE devices while rebooting/startup.
 
 v1.4.7 (15-June-2025)
   - CHANGED: Re-enable develop branch for script development.
