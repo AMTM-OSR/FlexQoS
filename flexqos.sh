@@ -12,7 +12,7 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.9
+version=1.4.10
 release=2025-08-04
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
@@ -1940,6 +1940,8 @@ uninstall() {
 	rm -f "/opt/bin/${SCRIPTNAME}" 2>/dev/null
 	printf "Removing delayed cron job...\n"
 	cru d "${SCRIPTNAME}_5min" 2>/dev/null
+	printf "Removing QoS schedule cron jobs...\n"
+	_qs_clear_jobs
 	remove_webui
 	printf "Removing %s settings...\n" "${SCRIPTNAME_DISPLAY}"
 	if [ "${force}" = "force" ] || [ "${force}" = "-f" ]; then
