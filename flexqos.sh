@@ -13,7 +13,7 @@
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
 version=1.5.1
-release=2025-09-xx
+release=2025-09-06
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).

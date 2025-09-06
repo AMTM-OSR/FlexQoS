@@ -1,6 +1,6 @@
 v1.5.1 (06-Sep-2025)
   - FIXED: Properly compare version by using arithmetic conversation
-  - FIXED: Fixed new Schedule keeping Flow Cache Disabled when disabling QoS
+  - FIXED: Fixed new schedule keeping Flow Cache disabled when disabling QoS
 
 v1.5.0 (06-Sep-2025)
   - FIXED: Allow script versions with double-digit segments.
