@@ -3104,7 +3104,7 @@ function DelCookie(cookiename){
         <table width="100%" border="1" cellspacing="0" cellpadding="4" class="FormTable_table">
           <thead>
             <tr>
-              <td colspan="4">Add schedule window</td>
+              <td colspan="4">Add schedule</td>
             </tr>
           </thead>
           <tbody>
