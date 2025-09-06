@@ -12,7 +12,7 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.10
+version=1.5.0
 release=2025-09-06
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
@@ -1030,8 +1030,13 @@ compare_remote_version() {
 	# Outcomes: Version update, or no update
 	local remotever
 	# Fetch version of the shell script on Github
-	remotever="$(curl -fsN --retry 3 --connect-timeout 3 "${GIT_URL}/$(basename "${SCRIPTPATH}")" | /bin/grep "^version=" | sed -e 's/version=//')"
-	if [ "$( echo "${version}" | sed 's/\.//g' )" -lt "$( echo "${remotever}" | sed 's/\.//g' )" ]; then		# strip the . from version string for numeric comparison
+	remotever="$(curl -fsN --retry 3 --connect-timeout 3 \
+		"${GIT_URL}/$(basename "${SCRIPTPATH}")" \
+		| /bin/grep '^version=' \
+		| sed -e 's/^version=//' -e 's/"//g' -e 's/\r//g')"
+
+	if [ "$( echo "${version}"   | sed 's/\.//g' )" -lt \
+	     "$( echo "${remotever}" | sed 's/\.//g' )" ]; then
 		# version upgrade
 		echo "${remotever}"
 	else
@@ -1050,8 +1055,8 @@ update() {
 	updatestatus="$(compare_remote_version)"
 	# Check to make sure we got back a valid status from compare_remote_version(). If not, indicate Error.
 	case "${updatestatus}" in
-		'NoUpdate'|[0-9].[0-9].[0-9]) ;;
-		*) updatestatus="Error"
+		'NoUpdate'|[0-9]*.[0-9]*.[0-9]*) ;;
+		*) updatestatus="Error" ;;
 	esac
 	printf "var verUpdateStatus = \"%s\";\n" "${updatestatus}" > "/www/ext/${SCRIPTNAME}/detect_update.js"
 
