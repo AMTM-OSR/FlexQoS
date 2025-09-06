@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.5.0
-release=2025-09-06
+version=1.5.1
+release=2025-09-xx
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -1029,20 +1029,28 @@ compare_remote_version() {
 	# Check version on Github and determine the difference with the installed version
 	# Outcomes: Version update, or no update
 	local remotever
-	# Fetch version of the shell script on Github
-	remotever="$(curl -fsN --retry 3 --connect-timeout 3 \
+
+	remotever="$(curl -fsS --retry 3 --connect-timeout 3 \
 		"${GIT_URL}/$(basename "${SCRIPTPATH}")" \
 		| /bin/grep '^version=' \
-		| sed -e 's/^version=//' -e 's/"//g' -e 's/\r//g')"
+		| sed -e 's/^version=//' -e 's/"//g' -e 's/\r//g' -e 's/[^0-9.]//g')"
 
-	if [ "$( echo "${version}"   | sed 's/\.//g' )" -lt \
-	     "$( echo "${remotever}" | sed 's/\.//g' )" ]; then
-		# version upgrade
-		echo "${remotever}"
+	# Convert 1.5.0 -> 001005000 (4 parts just in case)
+	ver2int() {
+		local a b c d IFS=.
+		set -- $1
+		a=${1:-0}; b=${2:-0}; c=${3:-0}; d=${4:-0}
+		printf '%03d%03d%03d%03d\n' "$a" "$b" "$c" "$d"
+	}
+
+	[ -z "$remotever" ] && { printf 'Error\n'; return; }
+
+	if [ "$(ver2int "$version")" -lt "$(ver2int "$remotever")" ]; then
+		printf '%s\n' "$remotever"
 	else
-		printf "NoUpdate\n"
+		printf 'NoUpdate\n'
 	fi
-} # compare_remote_version
+}
 
 update() {
 	# Check for, and optionally apply updates.
@@ -1114,6 +1122,54 @@ _flush_conntrack_(){
 	fi
 }
 
+_fc_apply_policy() {
+  # $1 = "on"  (QoS being enabled)  -> maybe DISABLE FC (Auto/Force)
+  # $1 = "off" (QoS being disabled) -> maybe ENABLE  FC (Auto)
+  case "$(uname -r)" in
+    4.19.*)
+      # Make sure we have current settings
+      [ -z "${fccontrol}${iptables_rules}" ] && get_config
+
+      case "${1}" in
+        on)
+          # Mirror the existing startup() logic
+          if [ -n "${iptables_rules}" ]; then
+            if [ "${fccontrol}" = "1" ]; then
+              # Force disable
+              if [ "$(nvram get fc_disable)" != "1" ]; then
+                logmsg "Disabling flowcache"
+                fc disable
+                fc flush
+              fi
+            elif [ "${fccontrol}" = "2" ]; then
+              # Auto: only if <400 Mbps both ways and FC currently enabled
+              if \
+                [ "$(printf "%.0f" "$(nvram get qos_ibw)")" -lt 409600 ] && \
+                [ "$(printf "%.0f" "$(nvram get qos_obw)")" -lt 409600 ] && \
+                [ "$(nvram get fc_disable)" = "0" ]
+              then
+                logmsg "Auto-disabling flowcache"
+                fc disable
+                fc flush
+              fi
+            fi
+          fi
+          ;;
+        off)
+          # When QoS is turned off by schedule, *re-enable* FC in Auto mode
+          if [ "${fccontrol}" = "2" ]; then
+            if [ "$(nvram get fc_disable)" != "0" ]; then
+              logmsg "QoS disabled by schedule; re-enabling flowcache (Auto)"
+              fc enable
+              fc flush
+            fi
+          fi
+          ;;
+      esac
+      ;;
+  esac
+}
+
 prompt_restart() {
 	# Restart QoS so that FlexQoS changes can take effect.
 	# Possible values for $needrestart:
@@ -1152,6 +1208,7 @@ qos_stop() {
 
     if [ "${need_stop}" = "1" ]; then
         service stop_qos
+        _fc_apply_policy off
         prompt_restart
         _flush_conntrack_
         # Only persist if explicitly requested
@@ -1180,6 +1237,7 @@ qos_start() {
 
     if [ "${need_start}" = "1" ]; then
         service start_qos
+        _fc_apply_policy on
         prompt_restart
         _flush_conntrack_
         # Only persist if explicitly requested
@@ -2218,30 +2276,11 @@ startup() {
 	generate_bwdpi_arrays
 	get_config
 	qos_schedule_apply_from_config
-
-	case "$(uname -r)" in
-	4.19.*)
-		if \
-		[ "$(printf "%.0f" "$(nvram get qos_ibw)")" -lt 409600 ] && \
-		[ "$(printf "%.0f" "$(nvram get qos_obw)")" -lt 409600 ] && \
-		[ "$(nvram get fc_disable)" = "0" ] && \
-		[ -n "${iptables_rules}" ] && \
-		[ "${fccontrol}" = "2" ]
-		then
-			logmsg "Auto-disabling flowcache"
-			fc disable
-			fc flush
-		elif \
-		[ -n "${iptables_rules}" ] && \
-		[ "${fccontrol}" = "1" ]
-		then
-			logmsg "Disabling flowcache"
-			fc disable
-			fc flush
-		fi
-		;;
-	esac
-
+	if [ "$(nvram get qos_enable)" = "1" ]; then
+		_fc_apply_policy on
+	else
+		_fc_apply_policy off
+	fi
 	_flush_conntrack_
 
 	cru d "${SCRIPTNAME}"_5min 2>/dev/null
