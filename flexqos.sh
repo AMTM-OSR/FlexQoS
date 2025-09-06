@@ -12,7 +12,7 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.9
+version=1.4.10
 release=2025-08-04
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
@@ -976,6 +976,7 @@ backup() {
 				[ -n "$(am_settings_get "${SCRIPTNAME}"_appdb)" ]          && printf "am_settings_set %s_appdb \"%s\"\n" "${SCRIPTNAME}" "$(am_settings_get "${SCRIPTNAME}"_appdb)"
 				[ -n "$(am_settings_get "${SCRIPTNAME}"_bwrates)" ]        && printf "am_settings_set %s_bwrates \"%s\"\n" "${SCRIPTNAME}" "$(am_settings_get "${SCRIPTNAME}"_bwrates)"
 				[ -n "$(am_settings_get "${SCRIPTNAME}"_qdisc)" ]          && printf "am_settings_set %s_qdisc \"%s\"\n" "${SCRIPTNAME}" "$(am_settings_get "${SCRIPTNAME}"_qdisc)"
+				[ -n "$(am_settings_get "${SCRIPTNAME}"_schedule)" ]       && printf "am_settings_set %s_schedule \"%s\"\n" "${SCRIPTNAME}" "$(am_settings_get "${SCRIPTNAME}"_schedule)"
 			} > "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
 			if /bin/grep -q "${SCRIPTNAME}_" "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"; then
 				Green "Backup done to ${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
@@ -991,6 +992,7 @@ backup() {
 				read -r yn
 				if [ "${yn}" = "1" ]; then
 					sh "${ADDON_DIR}/restore_${SCRIPTNAME}_settings.sh"
+					qos_schedule_apply_from_config
 					Green "Backup restored!"
 					needrestart=1
 				else
@@ -1940,6 +1942,8 @@ uninstall() {
 	rm -f "/opt/bin/${SCRIPTNAME}" 2>/dev/null
 	printf "Removing delayed cron job...\n"
 	cru d "${SCRIPTNAME}_5min" 2>/dev/null
+	printf "Removing QoS schedule cron jobs...\n"
+	_qs_clear_jobs
 	remove_webui
 	printf "Removing %s settings...\n" "${SCRIPTNAME_DISPLAY}"
 	if [ "${force}" = "force" ] || [ "${force}" = "-f" ]; then
