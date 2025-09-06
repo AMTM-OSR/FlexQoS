@@ -1,5 +1,6 @@
 v1.4.10 (08-Sep-2025)
   - FIXED: Adressed missing cleanup for any cron job schedules when uninstalling.
+  - FIXED: Missing the ability to backup the new QoS schedules.
 
 v1.4.9 (04-Sep-2025)
   - NEW: Includes Flexible/Dynamic Scheduling of the QoS system on ASUS routers. As requested here: https://www.snbforums.com/threads/flexqos-1-4-8-flexible-qos-enhancement-script-for-adaptive-qos.94976/post-964632
