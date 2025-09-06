@@ -12,7 +12,7 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.4.10
+version=1.5.0
 release=2025-09-06
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
