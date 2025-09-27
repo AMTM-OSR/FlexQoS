@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.5.1
-release=2025-09-06
+version=1.5.2
+release=2025-09-27
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -2275,12 +2275,7 @@ startup() {
 	install_webui mount
 	generate_bwdpi_arrays
 	get_config
-	qos_schedule_apply_from_config
-	if [ "$(nvram get qos_enable)" = "1" ]; then
-		_fc_apply_policy on
-	else
-		_fc_apply_policy off
-	fi
+	_fc_apply_policy on
 	_flush_conntrack_
 
 	cru d "${SCRIPTNAME}"_5min 2>/dev/null
@@ -2329,6 +2324,12 @@ startup() {
 		schedule_check_job
 	else
 		logmsg "No TC modifications necessary"
+	fi
+
+	qos_schedule_apply_from_config
+	if [ "$(nvram get qos_enable)" != "1" ]; then
+		_fc_apply_policy off
+		_flush_conntrack_
 	fi
 } # startup
 
@@ -2464,6 +2465,8 @@ needrestart=0		# initialize variable used in prompt_restart()
 case "${arg1}" in
 	'start'|'check')
 		logmsg "$0 (pid=$$) called in ${mode} mode with $# args: $*"
+		SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
+		if [ -n "$SCHEDULE" ]; then qos_start; fi
 		startup
 		;;
 	'appdb')
