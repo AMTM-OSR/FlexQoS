@@ -1,3 +1,6 @@
+v1.5.2 (30-Sep-2025)
+  - FIXED: A bug caused FlexQoS to fail the startup sequenece if the router rebooted while a QoS schedule had QoS disabled.
+
 v1.5.1 (06-Sep-2025)
   - FIXED: Properly compare version by using arithmetic conversion
   - FIXED: Fixed new schedule keeping Flow Cache disabled when disabling QoS
