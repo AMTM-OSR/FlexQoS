@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.5.2
-release=2025-09-27
+version=1.5.3
+release=2026-02-27
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -49,6 +49,9 @@ readonly fwInstalledBuildVers="$(nvram get buildno)"
 # shellcheck disable=SC2155
 readonly fwInstalledExtendNum="$(nvram get extendno)"
 IPv6_enabled="$(nvram get ipv6_service)"
+
+# To support automatic script updates from AMTM #
+doScriptUpdateFromAMTM=true
 
 # Update version number in custom_settings.txt for reading in WebUI
 if [ "$(am_settings_get "${SCRIPTNAME}"_ver)" != "${version}" ]; then
@@ -1106,6 +1109,23 @@ update() {
 	exit
 } # update
 
+##---------------------------------------##
+## Added by ExtremeFiretop [2026-Feb-27] ##
+##---------------------------------------##
+ScriptUpdateFromAMTM()
+{
+    if ! "$doScriptUpdateFromAMTM"
+    then
+        printf "Automatic script updates via AMTM are currently disabled.\n\n"
+        return 1
+    fi
+    if [ $# -gt 0 ] && [ "$1" = "check" ]
+    then return 0
+    fi
+    update silent
+    return "$?"
+}
+
 _flush_conntrack_(){
 	if ! validate_iptables_rules; then
 		write_iptables_rules
@@ -1943,6 +1963,9 @@ Firmware_Check() {
 	fi
 } # Firmware_Check
 
+##------------------------------------------##
+## Modified by ExtremeFiretop [2026-Feb-27] ##
+##------------------------------------------##
 install() {
 	# Install script and download webui file
 	# This is also called by the update process once a new script is downloaded by update() function
@@ -1983,10 +2006,19 @@ install() {
 			Green "Backup found!"
 			backup restore
 		fi
-		[ "$(nvram get qos_enable)" = "1" ] && needrestart=1
-	else
-		[ "$(nvram get qos_enable)" = "1" ] && needrestart=2
 	fi
+
+	# Restart flag logic:
+	# - interactive + NOT silent => needrestart=1
+	# - non-interactive OR silent => needrestart=2
+	if [ "$(nvram get qos_enable)" = "1" ]; then
+		if [ "${mode}" = "interactive" ] && [ "${1}" != "silent" ]; then
+			needrestart=1
+		else
+			needrestart=2
+		fi
+	fi
+
 	# Remove setting if set to default value 1 (enabled)
 	sed -i "/^${SCRIPTNAME}_conntrack 1/d" /jffs/addons/custom_settings.txt
 	# Remove deprecated 3:30 AM cron job if exists
@@ -2502,6 +2534,11 @@ case "${arg1}" in
 	update*)		# updatecheck, updatesilent, or plain update
 		update "${arg1#update}"		# strip 'update' from arg1 to pass to update function
 		;;
+    amtmupdate)
+        shift
+        ScriptUpdateFromAMTM "$@"
+        exit "$?"
+        ;;
 	'develop')
 		if [ "$(am_settings_get "${SCRIPTNAME}_branch")" = "develop" ]; then
 			printf "Already set to development branch.\n"
