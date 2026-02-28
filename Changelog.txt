@@ -1,3 +1,8 @@
+v1.5.3 (27-Feb-2026)
+  - NEW: Added AMTM automatic update support via amtmupdate (includes amtmupdate check).
+  - NEW: Added doScriptUpdateFromAMTM toggle to enable/disable AMTM-triggered updates (default: enabled).
+  - CHANGED: AMTM-triggered installs/updates now treat silent as non-interactive for restart handling (needrestart=2).
+
 v1.5.2 (30-Sep-2025)
   - FIXED: A bug caused FlexQoS to fail the startup sequenece if the router rebooted while a QoS schedule had QoS disabled.
 
