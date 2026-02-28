@@ -2531,10 +2531,10 @@ case "${arg1}" in
 	'about')
 		about
 		;;
-	update*)		# updatecheck, updatesilent, or plain update
+	 update*)		# updatecheck, updatesilent, or plain update
 		update "${arg1#update}"		# strip 'update' from arg1 to pass to update function
 		;;
-    amtmupdate)
+    'amtmupdate')
         shift
         ScriptUpdateFromAMTM "$@"
         exit "$?"
