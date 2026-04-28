@@ -1282,38 +1282,90 @@ _qs_int() { printf '%d' "$(_qs_to_dec "$1")"; }
 _qs_parse_time() {
     local t h m
     t="$(_qs_trim "$1")"
-    h="${t%%:*}"; m="${t#*:}"; [ "$t" = "$h" ] && m="0"
-    h="$(_qs_to_dec "$h")"; m="$(_qs_to_dec "$m")"
+
+    case "$t" in
+        ''|*[!0-9:]*|:*|*:|*:*:*) return 1 ;;
+    esac
+
+    h="${t%%:*}"
+    m="${t#*:}"
+    [ "$t" = "$h" ] && m="0"
+
+    case "$h" in ''|*[!0-9]*) return 1 ;; esac
+    case "$m" in ''|*[!0-9]*) return 1 ;; esac
+
+    h="$(_qs_to_dec "$h")"
+    m="$(_qs_to_dec "$m")"
+
     [ "$h" -ge 0 ] && [ "$h" -le 23 ] && [ "$m" -ge 0 ] && [ "$m" -le 59 ] || return 1
     printf '%02d %02d' "$h" "$m"
 }
 
 _qs_now_in_window() {
-    local sh=$(_qs_int "$1") sm=$(_qs_int "$2")
-    local eh=$(_qs_int "$3") em=$(_qs_int "$4")
-    local dow="${5:-*}"
+    local sh sm eh em dow
+    local today ok part s e oldifs
+    local now_h now_m now start end
 
-    # DOW check
+    sh="$(_qs_int "$1")"
+    sm="$(_qs_int "$2")"
+    eh="$(_qs_int "$3")"
+    em="$(_qs_int "$4")"
+    dow="${5:-*}"
+
+    # DOW check.
+    # date +%w gives 0=Sunday ... 6=Saturday.
+    # Accept 7 as Sunday too.
     if [ "$dow" != "*" ]; then
-        local today="$(date +%w)" ok=0 part s e
-        IFS=','; for part in $dow; do
-            if echo "$part" | grep -q -- '-'; then
-                s="${part%-*}" ; e="${part#*-}"
-                [ "$today" -ge "$s" ] && [ "$today" -le "$e" ] && { ok=1; break; }
-            else
-                [ "$part" = "7" ] && part="0"
-                [ "$today" = "$part" ] && { ok=1; break; }
-            fi
-        done; IFS=' '
-        [ "$ok" = 1 ] || return 1
+        today="$(date +%w)"
+        ok=0
+        oldifs="$IFS"
+        IFS=','
+
+        for part in $dow; do
+            case "$part" in
+                *-*)
+                    s="${part%-*}"
+                    e="${part#*-}"
+
+                    [ "$s" = "7" ] && s="0"
+                    [ "$e" = "7" ] && e="0"
+
+                    # Normal range, e.g. 1-5.
+                    if [ "$s" -le "$e" ]; then
+                        [ "$today" -ge "$s" ] && [ "$today" -le "$e" ] && {
+                            ok=1
+                            break
+                        }
+                    # Wrapped range, e.g. 5-1 means Fri/Sat/Sun/Mon.
+                    else
+                        { [ "$today" -ge "$s" ] || [ "$today" -le "$e" ]; } && {
+                            ok=1
+                            break
+                        }
+                    fi
+                    ;;
+                *)
+                    [ "$part" = "7" ] && part="0"
+                    [ "$today" = "$part" ] && {
+                        ok=1
+                        break
+                    }
+                    ;;
+            esac
+        done
+
+        IFS="$oldifs"
+
+        [ "$ok" = "1" ] || return 1
     fi
 
     # Minute-of-day check
-    local now_h=$(_qs_int "$(date +%H)")
-    local now_m=$(_qs_int "$(date +%M)")
-    local now=$(( now_h * 60 + now_m ))
-    local start=$(( sh * 60 + sm ))
-    local end=$(( eh * 60 + em ))
+    now_h="$(_qs_int "$(date +%H)")"
+    now_m="$(_qs_int "$(date +%M)")"
+
+    now=$(( now_h * 60 + now_m ))
+    start=$(( sh * 60 + sm ))
+    end=$(( eh * 60 + em ))
 
     if [ "$start" -le "$end" ]; then
         [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ]
@@ -1323,7 +1375,36 @@ _qs_now_in_window() {
 }
 
 _qs_valid_dow() {
-    echo "$1" | grep -Eq '^(\*|([0-7](-[0-7])?)(,([0-7](-[0-7])?))*)$'
+    local dow part s e oldifs
+
+    dow="$1"
+    [ "$dow" = "*" ] && return 0
+    [ -n "$dow" ] || return 1
+
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            [0-7])
+                ;;
+            [0-7]-[0-7])
+                s="${part%-*}"
+                e="${part#*-}"
+                if [ "$s" -gt "$e" ]; then
+                    IFS="$oldifs"
+                    return 1
+                fi
+                ;;
+            *)
+                IFS="$oldifs"
+                return 1
+                ;;
+        esac
+    done
+
+    IFS="$oldifs"
+    return 0
 }
 
 _qs_clear_jobs() {
