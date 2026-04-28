@@ -2596,7 +2596,7 @@ needrestart=0		# initialize variable used in prompt_restart()
 
 case "${arg1}" in
 	'start'|'check')
-		logmsg "$0 (pid=$$) called in ${mode} mode with $# args: $*"
+	  logmsg "invoked: action=${1:-none} mode=${mode} pid=$$ ppid=$PPID args='$*'"
 		SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
 		if [ -n "$SCHEDULE" ]; then qos_start; fi
 		startup
