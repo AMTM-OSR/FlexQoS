@@ -806,7 +806,8 @@ parse_iptablerule() {
 	local DOWN_Lport UP_Lport
 	local DOWN_Rport UP_Rport
 	local tmpMark DOWN_mark UP_mark
-	local DOWN_dst UP_dst Dst_mark
+  local DOWN_dst UP_dst Dst_mark
+  local cat id
 	# local IP
 	# Check for acceptable IP format
 	if echo "${1}" | Is_Valid_CIDR; then
@@ -845,7 +846,7 @@ parse_iptablerule() {
 		PROTOS="${3}"
 	elif [ "${#4}" -gt "1" ] || [ "${#5}" -gt "1" ]; then
 		# proto=both & ports are defined
-		PROTOS="tcp>udp"		# separated by > because IFS will be temporarily set to '>' by calling function. TODO Fix Me
+		PROTOS="both"
 	else
 		# neither proto nor ports defined
 		PROTOS="all"
@@ -916,7 +917,12 @@ parse_iptablerule() {
 
 	# This block is redirected to the /tmp/flexqos_iprules file, so no extraneous output, please
 	# If proto=both we have to create 2 statements, one for tcp and one for udp.
-	for proto in ${PROTOS}; do
+	case "${PROTOS}" in
+		both) set -- tcp udp ;;
+		*)    set -- "${PROTOS}" ;;
+	esac
+
+	for proto do
 		# download ipv4
 		printf "iptables -t mangle -A %s %s %s -p %s %s %s %s %s\n" "${SCRIPTNAME_DISPLAY}_down" "${DOWN_Lip}" "${DOWN_Rip}" "${proto}" "${DOWN_Lport}" "${DOWN_Rport}" "${DOWN_mark}" "${DOWN_dst}"
 		# upload ipv4
