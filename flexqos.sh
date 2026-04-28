@@ -199,34 +199,65 @@ write_appdb_static_rules() {
 	} > "/tmp/${SCRIPTNAME}_tcrules"
 } # write_appdb_static_rules
 
+init_tc_cache() {
+	local QOS_OVERHEAD
+	local QOS_ATM
+
+	QDISC="$(am_settings_get "${SCRIPTNAME}"_qdisc)"
+	[ -z "${QDISC}" ] && QDISC="0"
+
+	# Cache the MTU/ATM-derived minimum once per run instead of recalculating it
+	# in get_burst(), get_cburst(), and get_quantum() for every generated class.
+	MIN_PACKET=$(( (WANMTU + 48 + 47) / 48 * 53 ))
+
+	QOS_OVERHEAD="$(nvram get qos_overhead)"
+	QOS_ATM="$(nvram get qos_atm)"
+	HTB_OVERHEAD=""
+
+	if [ -n "${QOS_OVERHEAD}" ] && [ "${QOS_OVERHEAD}" -gt "0" ]; then
+		HTB_OVERHEAD="overhead ${QOS_OVERHEAD}"
+		if [ "${QOS_ATM}" = "1" ]; then
+			HTB_OVERHEAD="${HTB_OVERHEAD} linklayer atm"
+		else
+			HTB_OVERHEAD="${HTB_OVERHEAD} linklayer ethernet"
+		fi
+	fi
+} # init_tc_cache
+
+ensure_tc_variables() {
+	# Defensive guard for callers that generate TC rules without first running
+	# the normal get_config -> set_tc_variables path. HTB_OVERHEAD may
+	# legitimately be empty, so MIN_PACKET is used as the cache sentinel.
+	[ -n "${bwrates}" ] || get_config
+
+	if [ -z "${tclan}" ] || [ -z "${tcwan}" ] || \
+	   [ -z "${DownCeil}" ] || [ -z "${UpCeil}" ] || \
+	   [ -z "${MIN_PACKET}" ]; then
+		set_tc_variables
+	elif [ -z "${QDISC}" ]; then
+		init_tc_cache
+	fi
+} # ensure_tc_variables
+
 get_burst() {
 	local RATE
 	local DURATION
 	local BURST
-	local MIN_BURST
 
 	RATE="${1}"
 	DURATION="${2}"	# acceptable added latency in microseconds (1ms)
-
-	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
-	# let's assume ATM/AAL5 to be the worst case encapsulation
-	# and 48 Bytes a reasonable worst case per packet overhead
-	MIN_BURST=$(( WANMTU + 48 ))		# add 48 bytes to MTU for the  ovehead
-	MIN_BURST=$(( MIN_BURST + 47 ))		# now do ceil(Min_BURST / 48) * 53 in shell integer arithmic
-	MIN_BURST=$(( MIN_BURST / 48 ))
-	MIN_BURST=$(( MIN_BURST * 53 ))		# for MTU 1489 to 1536 this will result in MIN_BURST = 1749 Bytes
 
 	BURST=$((DURATION*RATE/8000))
 
 	# If the calculated burst is less than ASUS' minimum value of 3200, use 3200
 	# to avoid problems with child and leaf classes outside of FlexQoS scope that use 3200.
-	# If using fq_codel option, use 1600 as a minimum burst.
-	if [ "$(am_settings_get "${SCRIPTNAME}"_qdisc)" = "0" ]; then
+	# If using fq_codel option, use the cached MTU/ATM-derived minimum packet size.
+	if [ "${QDISC:-0}" = "0" ]; then
 		if [ "${BURST}" -lt 3200 ]; then
 			BURST=3200
 		fi
-	elif [ "${BURST}" -lt "${MIN_BURST}" ]; then
-		BURST="${MIN_BURST}"
+	elif [ "${BURST}" -lt "${MIN_PACKET}" ]; then
+		BURST="${MIN_PACKET}"
 	fi
 
 	printf "%s" "${BURST}"
@@ -235,17 +266,8 @@ get_burst() {
 get_cburst() {
 	local RATE
 	local BURST
-	local MIN_BURST
 
 	RATE="${1}"
-
-	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
-	# let's assume ATM/AAL5 to be the worst case encapsulation
-	# and 48 Bytes a reasonable worst case per packet overhead
-	MIN_BURST=$(( WANMTU + 48 ))		# add 48 bytes to MTU for the  ovehead
-	MIN_BURST=$(( MIN_BURST + 47 ))		# now do ceil(Min_BURST / 48) * 53 in shell integer arithmic
-	MIN_BURST=$(( MIN_BURST / 48 ))
-	MIN_BURST=$(( MIN_BURST * 53 ))		# for MTU 1489 to 1536 this will result in MIN_BURST = 1749 Bytes
 
 	BURST=$((RATE*1000/1280000))
 	BURST=$((BURST*1600))
@@ -253,10 +275,10 @@ get_cburst() {
 	# If the calculated burst is less than ASUS' minimum value of 3200, use 3200
 	# to avoid problems with child and leaf classes outside of FlexQoS scope that use 3200.
 	if [ "${BURST}" -lt 3200 ]; then
-		if [ "$(am_settings_get "${SCRIPTNAME}"_qdisc)" = "0" ]; then
+		if [ "${QDISC:-0}" = "0" ]; then
 			BURST=3200
 		else
-			BURST="${MIN_BURST}"
+			BURST="${MIN_PACKET}"
 		fi
 	fi
 
@@ -266,46 +288,21 @@ get_cburst() {
 get_quantum() {
 	local RATE
 	local QUANTUM
-	local MIN_QUANTUM
 
 	RATE="${1}"
 
-	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
-	# let's assume ATM/AAL5 to be the worst case encapsulation
-	# and 48 Bytes a reasonable worst case per packet overhead
-	MIN_QUANTUM=$(( WANMTU + 48 ))		# add 48 bytes to MTU for the  ovehead
-	MIN_QUANTUM=$(( MIN_QUANTUM + 47 ))		# now do ceil(Min_BURST / 48) * 53 in shell integer arithmic
-	MIN_QUANTUM=$(( MIN_QUANTUM / 48 ))
-	MIN_QUANTUM=$(( MIN_QUANTUM * 53 ))		# for MTU 1489 to 1536 this will result in MIN_BURST = 1749 Bytes
-
 	QUANTUM=$((RATE*1000/8/10))
 
-	# If the calculated quantum is less than the MTU, use MTU+14 as the quantum
-	if [ "${QUANTUM}" -lt "${MIN_QUANTUM}" ]; then
-		QUANTUM="${MIN_QUANTUM}"
+	# If the calculated quantum is less than the MTU/ATM-derived minimum packet size, use the cached minimum.
+	if [ "${QUANTUM}" -lt "${MIN_PACKET}" ]; then
+		QUANTUM="${MIN_PACKET}"
 	fi
 
 	printf "%s" "${QUANTUM}"
 } # get_quantum
 
 get_overhead() {
-	local NVRAM_OVERHEAD
-	local NVRAM_ATM
-	local OVERHEAD
-
-	NVRAM_OVERHEAD="$(nvram get qos_overhead)"
-
-	if [ -n "${NVRAM_OVERHEAD}" ] && [ "${NVRAM_OVERHEAD}" -gt "0" ]; then
-		OVERHEAD="overhead ${NVRAM_OVERHEAD}"
-		NVRAM_ATM="$(nvram get qos_atm)"
-		if [ "${NVRAM_ATM}" = "1" ]; then
-			OVERHEAD="${OVERHEAD} linklayer atm"
-		else
-			OVERHEAD="${OVERHEAD} linklayer ethernet"
-		fi
-	fi
-
-	printf "%s" "${OVERHEAD}"
+	printf "%s" "${HTB_OVERHEAD}"
 } # get_overhead
 
 get_custom_rate_rule() {
@@ -327,6 +324,8 @@ get_custom_rate_rule() {
 
 write_custom_rates() {
 	local i
+	ensure_tc_variables
+
 	if [ "${DownCeil}" -gt "0" ] && [ "${UpCeil}" -gt "0" ]; then
 		# For all 8 classes (0-7), write the tc commands needed to modify the bandwidth rates and related parameters
 		# that get assigned in set_tc_variables().
@@ -504,6 +503,8 @@ EOF
 			i="$((i+1))"
 		done
 	fi # Auto Bandwidth check
+
+	init_tc_cache
 } # set_tc_variables
 
 appdb() {
@@ -2294,9 +2295,9 @@ write_appdb_rules() {
 
 get_fq_quantum() {
 	local BANDWIDTH
-	BANDWIDTH="${1}"
+	BANDWIDTH="${1:-0}"
 
-	if [ "${BANDWIDTH}" -lt "51200" ]; then
+	if [ "${BANDWIDTH}" -gt "0" ] && [ "${BANDWIDTH}" -lt "51200" ]; then
 		printf "quantum 300\n"
 	fi
 } # get_fq_quantum
@@ -2306,11 +2307,12 @@ get_fq_target() {
 	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
 	local BANDWIDTH
 	local TARGET INTERVAL
-	BANDWIDTH="${1}"
+	BANDWIDTH="${1:-0}"
 
 	# for ATM the worst case expansion including overhead seems to be 33 cells of 53 bytes each
 	# MAX DELAY = 1000 * 1000 * 33 * 53 * 8 / 1000  max delay in microseconds at 1kbps
-	TARGET=$(/usr/bin/awk -vBANDWIDTH="${BANDWIDTH}" 'BEGIN { print int( 1000 * 1000 * 33 * 53 * 8 / 1000 / BANDWIDTH ) }')
+	[ "${BANDWIDTH}" -gt "0" ] || return
+	TARGET=$((1000 * 33 * 53 * 8 / BANDWIDTH))
 	if [ "${TARGET}" -gt "5000" ]; then
 		# Increase interval by the same amount that target got increased
 		INTERVAL=$(( (100 - 5) * 1000 + TARGET ))
@@ -2320,14 +2322,24 @@ get_fq_target() {
 
 write_custom_qdisc() {
 	local i
-	if [ "$(am_settings_get "${SCRIPTNAME}"_qdisc)" != "0" ]; then
+	local down_fq_quantum down_fq_target
+	local up_fq_quantum up_fq_target
+
+	ensure_tc_variables
+
+	if [ "${QDISC:-0}" != "0" ]; then
+		down_fq_quantum="$(get_fq_quantum "${DownCeil}")"
+		down_fq_target="$(get_fq_target "${DownCeil}")"
+		up_fq_quantum="$(get_fq_quantum "${UpCeil}")"
+		up_fq_target="$(get_fq_target "${UpCeil}")"
+
 		{
 			printf "qdisc replace dev %s parent 1:2 handle 102: fq_codel noecn\n" "${tclan}"
 			printf "qdisc replace dev %s parent 1:2 handle 102: fq_codel noecn\n" "${tcwan}"
 			for i in 0 1 2 3 4 5 6 7
 			do
-				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s\n" "${tclan}" "${i}" "${i}" "$(get_fq_quantum "${DownCeil}")" "$(get_fq_target "${DownCeil}")"
-				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s noecn\n" "${tcwan}" "${i}" "${i}" "$(get_fq_quantum "${UpCeil}")" "$(get_fq_target "${UpCeil}")"
+				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s\n" "${tclan}" "${i}" "${i}" "${down_fq_quantum}" "${down_fq_target}"
+				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s noecn\n" "${tcwan}" "${i}" "${i}" "${up_fq_quantum}" "${up_fq_target}"
 			done
 		} >> "/tmp/${SCRIPTNAME}_tcrules" 2>/dev/null
 	fi
