@@ -806,8 +806,8 @@ parse_iptablerule() {
 	local DOWN_Lport UP_Lport
 	local DOWN_Rport UP_Rport
 	local tmpMark DOWN_mark UP_mark
-  local DOWN_dst UP_dst Dst_mark
-  local cat id
+	local DOWN_dst UP_dst Dst_mark
+	local cat id
 	# local IP
 	# Check for acceptable IP format
 	if echo "${1}" | Is_Valid_CIDR; then
@@ -1033,14 +1033,17 @@ download_file() {
 	# Otherwise move it from the temp location to the destination.
 	if curl -fsL --retry 3 --connect-timeout 3 "${GIT_URL}/${1}" -o "/tmp/${1}"; then
 		if [ "$(md5sum "/tmp/${1}" | awk '{print $1}')" != "$(md5sum "${2}" 2>/dev/null | awk '{print $1}')" ]; then
-			mv -f "/tmp/${1}" "${2}"
+			mv -f "/tmp/${1}" "${2}" || return 1
 			logmsg "Updated $(basename "${1}")"
 		else
 			logmsg "File $(basename "${2}") is already up-to-date"
 			rm -f "/tmp/${1}" 2>/dev/null
 		fi
+		return 0
 	else
 		logmsg "Updating $(basename "${1}") failed"
+		rm -f "/tmp/${1}" 2>/dev/null
+		return 1
 	fi
 } # download_file
 
@@ -1120,7 +1123,11 @@ update() {
 		exit 5
 	fi
 	printf "Installing: %s...\n\n" "${SCRIPTNAME_DISPLAY}"
-	download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"
+	if ! download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"; then
+		Red "Download failed. Update aborted."
+		return 1
+	fi
+
 	exec sh "${SCRIPTPATH}" -install "${1}"
 	exit
 } # update
