@@ -139,6 +139,11 @@ iptables_static_rules() {
 	iptables -t mangle -A OUTPUT -o "${wan}" -p tcp -m multiport ! --dports 53,853 -j MARK --set-mark 0x40"${OUTPUTCLS}"ffff/0xc03fffff
 	iptables -t mangle -N "${SCRIPTNAME_DISPLAY}_down" 2>/dev/null
 	iptables -t mangle -N "${SCRIPTNAME_DISPLAY}_up" 2>/dev/null
+
+	# Remove any existing duplicate jumps before adding them back once.
+	while iptables -t mangle -D POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down" >/dev/null 2>&1; do :; done
+	while iptables -t mangle -D POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up" >/dev/null 2>&1; do :; done
+
 	iptables -t mangle -A POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down"
 	iptables -t mangle -A POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up"
 	if [ "${IPv6_enabled}" != "disabled" ]; then
@@ -152,6 +157,11 @@ iptables_static_rules() {
 		ip6tables -t mangle -A OUTPUT -o "${wan}" -p tcp -m multiport ! --dports 53,853 -j MARK --set-mark 0x40"${OUTPUTCLS}"ffff/0xc03fffff
 		ip6tables -t mangle -N "${SCRIPTNAME_DISPLAY}_down" 2>/dev/null
 		ip6tables -t mangle -N "${SCRIPTNAME_DISPLAY}_up" 2>/dev/null
+
+		# Remove any existing duplicate jumps before adding them back once.
+		while ip6tables -t mangle -D POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down" >/dev/null 2>&1; do :; done
+		while ip6tables -t mangle -D POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up" >/dev/null 2>&1; do :; done
+
 		ip6tables -t mangle -A POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down"
 		ip6tables -t mangle -A POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up"
 	fi
