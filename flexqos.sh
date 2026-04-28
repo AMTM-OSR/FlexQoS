@@ -1262,23 +1262,24 @@ qos_stop() {
 }
 
 qos_start() {
-    local cur_type cur_enable need_start
+    local cur_type cur_enable need_apply
     # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
     logmsg "Starting Adaptive QoS..."
-    need_start=0
+    need_apply=0
 
     cur_type="$(nvram get qos_type 2>/dev/null)"
     if [ -n "${cur_type}" ] && [ "${cur_type}" != "1" ]; then
         nvram set qos_type=1
+        need_apply=1
     fi
 
     cur_enable="$(nvram get qos_enable 2>/dev/null)"
     if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "1" ]; then
         nvram set qos_enable=1
-        need_start=1
+        need_apply=1
     fi
 
-    if [ "${need_start}" = "1" ]; then
+    if [ "${need_apply}" = "1" ]; then
         service start_qos
         _fc_apply_policy on
         prompt_restart
