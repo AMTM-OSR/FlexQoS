@@ -2240,11 +2240,12 @@ validate_iptables_rules() {
 
 write_iptables_rules() {
 	# loop through iptables rules and write an iptables command to a temporary file for later execution
-	local OLDIFS
 	local localip remoteip proto lport rport mark class
+
 	if [ -z "${iptables_rules}" ]; then
 		return 0
 	fi
+
 	{
 		printf "iptables -t mangle -F %s 2>/dev/null\n" "${SCRIPTNAME_DISPLAY}_down"
 		printf "iptables -t mangle -F %s 2>/dev/null\n" "${SCRIPTNAME_DISPLAY}_up"
@@ -2253,41 +2254,34 @@ write_iptables_rules() {
 			printf "ip6tables -t mangle -F %s 2>/dev/null\n" "${SCRIPTNAME_DISPLAY}_up"
 		fi
 	} > "/tmp/${SCRIPTNAME}_iprules"
-	OLDIFS="${IFS}"		# Save existing field separator
-	IFS=">"				# Set custom field separator to match rule format
+
 	# read the rules, 1 per line and break into separate fields
-	echo "${iptables_rules}" | sed 's/</\n/g' | while read -r localip remoteip proto lport rport mark class
+	printf '%s\n' "${iptables_rules}" | sed 's/</\n/g' | while IFS=">" read -r localip remoteip proto lport rport mark class
 	do
 		# Ensure at least one criteria field is populated
 		if [ -n "${localip}${remoteip}${proto}${lport}${rport}${mark}" ]; then
-			# Process the rule and the stdout containing the resulting rule gets saved to the temporary script file
+			# Process the rule and save the resulting commands to the temporary script file
 			parse_iptablerule "${localip}" "${remoteip}" "${proto}" "${lport}" "${rport}" "${mark}" "${class}" >> "/tmp/${SCRIPTNAME}_iprules" 2>/dev/null
 		fi
 	done
-	IFS="${OLDIFS}"		# Restore saved field separator
 } # write_iptables_rules
 
 write_appdb_rules() {
 	# Write the user appdb rules to the existing tcrules file created during write_appdb_static_rules()
-	local OLDIFS
 	local mark class
+
 	# Save the current filter rules once to avoid repeated calls in parse_appdb_rule() to determine existing prios
 	"${TC}" filter show dev "${tclan}" parent 1: > "/tmp/${SCRIPTNAME}_tmp_tcfilterdown"
 	"${TC}" filter show dev "${tcwan}" parent 1: > "/tmp/${SCRIPTNAME}_tmp_tcfilterup"
 
-	# loop through appdb rules and write a tc command to a temporary script file
-	OLDIFS="${IFS}"		# Save existing field separator
-	IFS=">"				# Set custom field separator to match rule format
-
 	# read the rules, 1 per line and break into separate fields
-	echo "${appdb_rules}" | sed 's/</\n/g' | while read -r mark class
+	printf '%s\n' "${appdb_rules}" | sed 's/</\n/g' | while IFS=">" read -r mark class
 	do
 		# Ensure the appdb mark is populated
 		if [ -n "${mark}" ]; then
 			parse_appdb_rule "${mark}" "${class}" >> "/tmp/${SCRIPTNAME}_tcrules" 2>/dev/null
 		fi
 	done
-	IFS="${OLDIFS}"		# Restore old field separator
 } # write_appdb_rules
 
 get_fq_quantum() {
@@ -2348,17 +2342,18 @@ check_qos_tc() {
 validate_tc_rules() {
 	# Check the existing tc filter rules against the user configuration. If any rule missing, force creation of all rules
 	# Must run after set_tc_variables() to ensure flowid can be determined
-	local OLDIFS filtermissing
+	local filtermissing
 	local mark class flowid
+
 	{
 		# print a list of existing filters in the format of an appdb rule for easy comparison. Write to tmp file
 		"${TC}" filter show dev "${tclan}" parent 1: | sed -nE '/flowid/ { N; s/\n//g; s/.*flowid (1:1[0-7]).*mark 0x[48]0([0-9a-fA-F]{6}).*/<\2>\1/p }'
 		"${TC}" filter show dev "${tcwan}" parent 1: | sed -nE '/flowid/ { N; s/\n//g; s/.*flowid (1:1[0-7]).*mark 0x[48]0([0-9a-fA-F]{6}).*/<\2>\1/p }'
 	} > "/tmp/${SCRIPTNAME}_checktcrules" 2>/dev/null
-	OLDIFS="${IFS}"
-	IFS=">"
+
 	filtermissing="0"
-	while read -r mark class
+
+	while IFS=">" read -r mark class
 	do
 		if [ -n "${mark}" ]; then
 			flowid="$(get_flowid "${class}")"
@@ -2369,9 +2364,9 @@ validate_tc_rules() {
 			fi
 		fi
 	done <<EOF
-$(echo "${appdb_rules}" | sed 's/</\n/g')
+$(printf '%s\n' "${appdb_rules}" | sed 's/</\n/g')
 EOF
-	IFS="${OLDIFS}"
+
 	if [ "${filtermissing}" -gt "0" ]; then
 		# reapply tc rules
 		return 1
