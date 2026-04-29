@@ -1351,10 +1351,108 @@ _qs_parse_time() {
     printf '%02d %02d' "$h" "$m"
 }
 
+_qs_dow_matches() {
+    local dow day ok part s e oldifs
+
+    dow="${1:-*}"
+    day="$(_qs_int "${2:-0}")"
+    [ "$day" = "7" ] && day="0"
+
+    [ "$dow" = "*" ] && return 0
+
+    ok=0
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            *-*)
+                s="${part%-*}"
+                e="${part#*-}"
+                [ "$s" = "7" ] && s="0"
+                [ "$e" = "7" ] && e="0"
+
+                if [ "$s" -le "$e" ]; then
+                    [ "$day" -ge "$s" ] && [ "$day" -le "$e" ] && {
+                        ok=1
+                        break
+                    }
+                else
+                    { [ "$day" -ge "$s" ] || [ "$day" -le "$e" ]; } && {
+                        ok=1
+                        break
+                    }
+                fi
+                ;;
+            *)
+                [ "$part" = "7" ] && part="0"
+                [ "$day" = "$part" ] && {
+                    ok=1
+                    break
+                }
+                ;;
+        esac
+    done
+
+    IFS="$oldifs"
+    [ "$ok" = "1" ]
+}
+
+_qs_shift_dow_next_day() {
+    local dow part s e d shifted result oldifs
+
+    dow="${1:-*}"
+    [ "$dow" = "*" ] && { printf '*'; return 0; }
+
+    result=""
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            *-*)
+                s="${part%-*}"
+                e="${part#*-}"
+                [ "$s" = "7" ] && s="0"
+                [ "$e" = "7" ] && e="0"
+
+                if [ "$s" -le "$e" ]; then
+                    d="$s"
+                    while [ "$d" -le "$e" ]; do
+                        shifted=$(( (d + 1) % 7 ))
+                        [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                        d=$(( d + 1 ))
+                    done
+                else
+                    d="$s"
+                    while [ "$d" -le 6 ]; do
+                        shifted=$(( (d + 1) % 7 ))
+                        [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                        d=$(( d + 1 ))
+                    done
+                    d=0
+                    while [ "$d" -le "$e" ]; do
+                        shifted=$(( (d + 1) % 7 ))
+                        [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                        d=$(( d + 1 ))
+                    done
+                fi
+                ;;
+            *)
+                [ "$part" = "7" ] && part="0"
+                shifted=$(( (part + 1) % 7 ))
+                [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                ;;
+        esac
+    done
+
+    IFS="$oldifs"
+    printf '%s' "$result"
+}
+
 _qs_now_in_window() {
     local sh sm eh em dow
-    local today ok part s e oldifs
-    local now_h now_m now start end
+    local now_h now_m now start end check_day
 
     sh="$(_qs_int "$1")"
     sm="$(_qs_int "$2")"
@@ -1362,54 +1460,8 @@ _qs_now_in_window() {
     em="$(_qs_int "$4")"
     dow="${5:-*}"
 
-    # DOW check.
-    # date +%w gives 0=Sunday ... 6=Saturday.
-    # Accept 7 as Sunday too.
-    if [ "$dow" != "*" ]; then
-        today="$(date +%w)"
-        ok=0
-        oldifs="$IFS"
-        IFS=','
-
-        for part in $dow; do
-            case "$part" in
-                *-*)
-                    s="${part%-*}"
-                    e="${part#*-}"
-
-                    [ "$s" = "7" ] && s="0"
-                    [ "$e" = "7" ] && e="0"
-
-                    # Normal range, e.g. 1-5.
-                    if [ "$s" -le "$e" ]; then
-                        [ "$today" -ge "$s" ] && [ "$today" -le "$e" ] && {
-                            ok=1
-                            break
-                        }
-                    # Wrapped range, e.g. 5-1 means Fri/Sat/Sun/Mon.
-                    else
-                        { [ "$today" -ge "$s" ] || [ "$today" -le "$e" ]; } && {
-                            ok=1
-                            break
-                        }
-                    fi
-                    ;;
-                *)
-                    [ "$part" = "7" ] && part="0"
-                    [ "$today" = "$part" ] && {
-                        ok=1
-                        break
-                    }
-                    ;;
-            esac
-        done
-
-        IFS="$oldifs"
-
-        [ "$ok" = "1" ] || return 1
-    fi
-
-    # Minute-of-day check
+    # Minute-of-day check. For overnight windows, the post-midnight segment
+    # belongs to the previous schedule day for DOW matching.
     now_h="$(_qs_int "$(date +%H)")"
     now_m="$(_qs_int "$(date +%M)")"
 
@@ -1418,10 +1470,19 @@ _qs_now_in_window() {
     end=$(( eh * 60 + em ))
 
     if [ "$start" -le "$end" ]; then
-        [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ]
+        [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ] || return 1
+        check_day="$(date +%w)"
     else
-        [ "$now" -ge "$start" ] || [ "$now" -lt "$end" ]
+        if [ "$now" -ge "$start" ]; then
+            check_day="$(date +%w)"
+        elif [ "$now" -lt "$end" ]; then
+            check_day=$(( ($(_qs_int "$(date +%w)") + 6) % 7 ))
+        else
+            return 1
+        fi
     fi
+
+    _qs_dow_matches "$dow" "$check_day"
 }
 
 _qs_valid_dow() {
@@ -1465,7 +1526,7 @@ _qs_clear_jobs() {
 
 _qs_apply_jobs() {
     _qs_clear_jobs
-    local n=0 aligned=0 rec en rest dow st et sh sm eh em sh_s sm_s eh_s em_s out ok
+    local n=0 aligned=0 rec en rest dow end_dow st et sh sm eh em sh_s sm_s eh_s em_s out ok
 
     # No schedules? Clear cron and LEAVE QoS state as-is.
     [ -z "$SCHEDULE" ] && return 0
@@ -1499,9 +1560,15 @@ _qs_apply_jobs() {
         sh="$(_qs_to_dec "$sh_s")"; sm="$(_qs_to_dec "$sm_s")"
         eh="$(_qs_to_dec "$eh_s")"; em="$(_qs_to_dec "$em_s")"
 
-        # Add cron jobs using *separate arguments* (most robust with cru)
+        # Add cron jobs using *separate arguments* (most robust with cru).
+        # Overnight schedules stop on the following DOW, e.g. Fri 22:00 -> Sat 06:00.
+        if [ $(( sh * 60 + sm )) -gt $(( eh * 60 + em )) ]; then
+            end_dow="$(_qs_shift_dow_next_day "$dow")"
+        else
+            end_dow="$dow"
+        fi
         n=$((n+1)); cru a "${QOS_CRON_ON}_${n}"  "$sm" "$sh" "*" "*" "$dow" "$SCRIPTPATH" -qosstart
-        n=$((n+1)); cru a "${QOS_CRON_OFF}_${n}" "$em" "$eh" "*" "*" "$dow" "$SCRIPTPATH" -qosstop
+        n=$((n+1)); cru a "${QOS_CRON_OFF}_${n}" "$em" "$eh" "*" "*" "$end_dow" "$SCRIPTPATH" -qosstop
 
         # Align immediate state
         if _qs_now_in_window "$sh" "$sm" "$eh" "$em" "$dow"; then aligned=1; fi
