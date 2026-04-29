@@ -357,6 +357,7 @@ set_tc_variables() {
 	local flowid
 	local line
 	local i
+	local learn_first
 
 	tclan="br0"
 	if [ -f /sys/module/tdts_udb/parameters/qos_wan ]; then
@@ -386,6 +387,10 @@ EOF
 
 	# read priority order of QoS categories as set by user on the QoS page of the GUI
 	flowid=0
+	learn_first=0
+	if nvram get bwdpi_app_rulelist | /bin/grep -qE "<4,13(<.*)?<4<"; then
+		learn_first=1
+	fi
 	while read -r line;
 	do
 		if [ "$(echo "${line}" | cut -c 1)" = '[' ]; then
@@ -411,7 +416,7 @@ EOF
 			# We have to find the priority placement of Learn-From-Home versus Streaming in the QoS GUI to know
 			# if the first time we encounter a 4 in the file if it is meant to be Streaming or Learn-From-Home.
 			# The second time we encounter a 4, we know it is meant for the remaining option.
-			if nvram get bwdpi_app_rulelist | /bin/grep -qE "<4,13(<.*)?<4<"; then
+			if [ "${learn_first}" = "1" ]; then
 				# Learn-From-Home is higher priority than Streaming
 				if [ -z "${Learn_flow}" ]; then
 					Learn_flow="1:1${flowid}"
