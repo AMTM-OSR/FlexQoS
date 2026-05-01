@@ -2566,8 +2566,9 @@ startup() {
 	install_webui mount
 	generate_bwdpi_arrays
 	get_config
-	_fc_apply_policy on
-	_flush_conntrack_
+	# Defer flowcache and conntrack handling until after
+	# qos_schedule_apply_from_config() has aligned the final QoS state.
+	# This avoids avoidable fc/conntrack churn during scheduled-off windows.
 
 	cru d "${SCRIPTNAME}"_5min 2>/dev/null
 	sleepdelay=0
@@ -2620,6 +2621,9 @@ startup() {
 	qos_schedule_apply_from_config
 	if [ "$(nvram get qos_enable)" != "1" ]; then
 		_fc_apply_policy off
+		_flush_conntrack_
+	else
+		_fc_apply_policy on
 		_flush_conntrack_
 	fi
 } # startup
@@ -2755,9 +2759,7 @@ needrestart=0		# initialize variable used in prompt_restart()
 
 case "${arg1}" in
 	'start'|'check')
-	  logmsg "invoked: action=${1:-none} mode=${mode} pid=$$ ppid=$PPID args='$*'"
-		SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
-		if [ -n "$SCHEDULE" ]; then qos_start; fi
+		logmsg "invoked: action=${1:-none} mode=${mode} pid=$$ ppid=$PPID args='$*'"
 		startup
 		;;
 	'appdb')
