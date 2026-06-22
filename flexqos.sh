@@ -139,6 +139,11 @@ iptables_static_rules() {
 	iptables -t mangle -A OUTPUT -o "${wan}" -p tcp -m multiport ! --dports 53,853 -j MARK --set-mark 0x40"${OUTPUTCLS}"ffff/0xc03fffff
 	iptables -t mangle -N "${SCRIPTNAME_DISPLAY}_down" 2>/dev/null
 	iptables -t mangle -N "${SCRIPTNAME_DISPLAY}_up" 2>/dev/null
+
+	# Remove any existing duplicate jumps before adding them back once.
+	while iptables -t mangle -D POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down" >/dev/null 2>&1; do :; done
+	while iptables -t mangle -D POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up" >/dev/null 2>&1; do :; done
+
 	iptables -t mangle -A POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down"
 	iptables -t mangle -A POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up"
 	if [ "${IPv6_enabled}" != "disabled" ]; then
@@ -152,6 +157,11 @@ iptables_static_rules() {
 		ip6tables -t mangle -A OUTPUT -o "${wan}" -p tcp -m multiport ! --dports 53,853 -j MARK --set-mark 0x40"${OUTPUTCLS}"ffff/0xc03fffff
 		ip6tables -t mangle -N "${SCRIPTNAME_DISPLAY}_down" 2>/dev/null
 		ip6tables -t mangle -N "${SCRIPTNAME_DISPLAY}_up" 2>/dev/null
+
+		# Remove any existing duplicate jumps before adding them back once.
+		while ip6tables -t mangle -D POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down" >/dev/null 2>&1; do :; done
+		while ip6tables -t mangle -D POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up" >/dev/null 2>&1; do :; done
+
 		ip6tables -t mangle -A POSTROUTING -o "${lan}" -m mark --mark 0x80000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_down"
 		ip6tables -t mangle -A POSTROUTING -o "${wan}" -m mark --mark 0x40000000/0xc0000000 -j "${SCRIPTNAME_DISPLAY}_up"
 	fi
@@ -189,34 +199,65 @@ write_appdb_static_rules() {
 	} > "/tmp/${SCRIPTNAME}_tcrules"
 } # write_appdb_static_rules
 
+init_tc_cache() {
+	local QOS_OVERHEAD
+	local QOS_ATM
+
+	QDISC="$(am_settings_get "${SCRIPTNAME}"_qdisc)"
+	[ -z "${QDISC}" ] && QDISC="0"
+
+	# Cache the MTU/ATM-derived minimum once per run instead of recalculating it
+	# in get_burst(), get_cburst(), and get_quantum() for every generated class.
+	MIN_PACKET=$(( (WANMTU + 48 + 47) / 48 * 53 ))
+
+	QOS_OVERHEAD="$(nvram get qos_overhead)"
+	QOS_ATM="$(nvram get qos_atm)"
+	HTB_OVERHEAD=""
+
+	if [ -n "${QOS_OVERHEAD}" ] && [ "${QOS_OVERHEAD}" -gt "0" ]; then
+		HTB_OVERHEAD="overhead ${QOS_OVERHEAD}"
+		if [ "${QOS_ATM}" = "1" ]; then
+			HTB_OVERHEAD="${HTB_OVERHEAD} linklayer atm"
+		else
+			HTB_OVERHEAD="${HTB_OVERHEAD} linklayer ethernet"
+		fi
+	fi
+} # init_tc_cache
+
+ensure_tc_variables() {
+	# Defensive guard for callers that generate TC rules without first running
+	# the normal get_config -> set_tc_variables path. HTB_OVERHEAD may
+	# legitimately be empty, so MIN_PACKET is used as the cache sentinel.
+	[ -n "${bwrates}" ] || get_config
+
+	if [ -z "${tclan}" ] || [ -z "${tcwan}" ] || \
+	   [ -z "${DownCeil}" ] || [ -z "${UpCeil}" ] || \
+	   [ -z "${MIN_PACKET}" ]; then
+		set_tc_variables
+	elif [ -z "${QDISC}" ]; then
+		init_tc_cache
+	fi
+} # ensure_tc_variables
+
 get_burst() {
 	local RATE
 	local DURATION
 	local BURST
-	local MIN_BURST
 
 	RATE="${1}"
 	DURATION="${2}"	# acceptable added latency in microseconds (1ms)
-
-	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
-	# let's assume ATM/AAL5 to be the worst case encapsulation
-	# and 48 Bytes a reasonable worst case per packet overhead
-	MIN_BURST=$(( WANMTU + 48 ))		# add 48 bytes to MTU for the  ovehead
-	MIN_BURST=$(( MIN_BURST + 47 ))		# now do ceil(Min_BURST / 48) * 53 in shell integer arithmic
-	MIN_BURST=$(( MIN_BURST / 48 ))
-	MIN_BURST=$(( MIN_BURST * 53 ))		# for MTU 1489 to 1536 this will result in MIN_BURST = 1749 Bytes
 
 	BURST=$((DURATION*RATE/8000))
 
 	# If the calculated burst is less than ASUS' minimum value of 3200, use 3200
 	# to avoid problems with child and leaf classes outside of FlexQoS scope that use 3200.
-	# If using fq_codel option, use 1600 as a minimum burst.
-	if [ "$(am_settings_get "${SCRIPTNAME}"_qdisc)" = "0" ]; then
+	# If using fq_codel option, use the cached MTU/ATM-derived minimum packet size.
+	if [ "${QDISC:-0}" = "0" ]; then
 		if [ "${BURST}" -lt 3200 ]; then
 			BURST=3200
 		fi
-	elif [ "${BURST}" -lt "${MIN_BURST}" ]; then
-		BURST="${MIN_BURST}"
+	elif [ "${BURST}" -lt "${MIN_PACKET}" ]; then
+		BURST="${MIN_PACKET}"
 	fi
 
 	printf "%s" "${BURST}"
@@ -225,17 +266,8 @@ get_burst() {
 get_cburst() {
 	local RATE
 	local BURST
-	local MIN_BURST
 
 	RATE="${1}"
-
-	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
-	# let's assume ATM/AAL5 to be the worst case encapsulation
-	# and 48 Bytes a reasonable worst case per packet overhead
-	MIN_BURST=$(( WANMTU + 48 ))		# add 48 bytes to MTU for the  ovehead
-	MIN_BURST=$(( MIN_BURST + 47 ))		# now do ceil(Min_BURST / 48) * 53 in shell integer arithmic
-	MIN_BURST=$(( MIN_BURST / 48 ))
-	MIN_BURST=$(( MIN_BURST * 53 ))		# for MTU 1489 to 1536 this will result in MIN_BURST = 1749 Bytes
 
 	BURST=$((RATE*1000/1280000))
 	BURST=$((BURST*1600))
@@ -243,10 +275,10 @@ get_cburst() {
 	# If the calculated burst is less than ASUS' minimum value of 3200, use 3200
 	# to avoid problems with child and leaf classes outside of FlexQoS scope that use 3200.
 	if [ "${BURST}" -lt 3200 ]; then
-		if [ "$(am_settings_get "${SCRIPTNAME}"_qdisc)" = "0" ]; then
+		if [ "${QDISC:-0}" = "0" ]; then
 			BURST=3200
 		else
-			BURST="${MIN_BURST}"
+			BURST="${MIN_PACKET}"
 		fi
 	fi
 
@@ -256,46 +288,21 @@ get_cburst() {
 get_quantum() {
 	local RATE
 	local QUANTUM
-	local MIN_QUANTUM
 
 	RATE="${1}"
 
-	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
-	# let's assume ATM/AAL5 to be the worst case encapsulation
-	# and 48 Bytes a reasonable worst case per packet overhead
-	MIN_QUANTUM=$(( WANMTU + 48 ))		# add 48 bytes to MTU for the  ovehead
-	MIN_QUANTUM=$(( MIN_QUANTUM + 47 ))		# now do ceil(Min_BURST / 48) * 53 in shell integer arithmic
-	MIN_QUANTUM=$(( MIN_QUANTUM / 48 ))
-	MIN_QUANTUM=$(( MIN_QUANTUM * 53 ))		# for MTU 1489 to 1536 this will result in MIN_BURST = 1749 Bytes
-
 	QUANTUM=$((RATE*1000/8/10))
 
-	# If the calculated quantum is less than the MTU, use MTU+14 as the quantum
-	if [ "${QUANTUM}" -lt "${MIN_QUANTUM}" ]; then
-		QUANTUM="${MIN_QUANTUM}"
+	# If the calculated quantum is less than the MTU/ATM-derived minimum packet size, use the cached minimum.
+	if [ "${QUANTUM}" -lt "${MIN_PACKET}" ]; then
+		QUANTUM="${MIN_PACKET}"
 	fi
 
 	printf "%s" "${QUANTUM}"
 } # get_quantum
 
 get_overhead() {
-	local NVRAM_OVERHEAD
-	local NVRAM_ATM
-	local OVERHEAD
-
-	NVRAM_OVERHEAD="$(nvram get qos_overhead)"
-
-	if [ -n "${NVRAM_OVERHEAD}" ] && [ "${NVRAM_OVERHEAD}" -gt "0" ]; then
-		OVERHEAD="overhead ${NVRAM_OVERHEAD}"
-		NVRAM_ATM="$(nvram get qos_atm)"
-		if [ "${NVRAM_ATM}" = "1" ]; then
-			OVERHEAD="${OVERHEAD} linklayer atm"
-		else
-			OVERHEAD="${OVERHEAD} linklayer ethernet"
-		fi
-	fi
-
-	printf "%s" "${OVERHEAD}"
+	printf "%s" "${HTB_OVERHEAD}"
 } # get_overhead
 
 get_custom_rate_rule() {
@@ -317,6 +324,8 @@ get_custom_rate_rule() {
 
 write_custom_rates() {
 	local i
+	ensure_tc_variables
+
 	if [ "${DownCeil}" -gt "0" ] && [ "${UpCeil}" -gt "0" ]; then
 		# For all 8 classes (0-7), write the tc commands needed to modify the bandwidth rates and related parameters
 		# that get assigned in set_tc_variables().
@@ -348,6 +357,7 @@ set_tc_variables() {
 	local flowid
 	local line
 	local i
+	local learn_first
 
 	tclan="br0"
 	if [ -f /sys/module/tdts_udb/parameters/qos_wan ]; then
@@ -377,6 +387,10 @@ EOF
 
 	# read priority order of QoS categories as set by user on the QoS page of the GUI
 	flowid=0
+	learn_first=0
+	if nvram get bwdpi_app_rulelist | /bin/grep -qE "<4,13(<.*)?<4<"; then
+		learn_first=1
+	fi
 	while read -r line;
 	do
 		if [ "$(echo "${line}" | cut -c 1)" = '[' ]; then
@@ -402,7 +416,7 @@ EOF
 			# We have to find the priority placement of Learn-From-Home versus Streaming in the QoS GUI to know
 			# if the first time we encounter a 4 in the file if it is meant to be Streaming or Learn-From-Home.
 			# The second time we encounter a 4, we know it is meant for the remaining option.
-			if nvram get bwdpi_app_rulelist | /bin/grep -qE "<4,13(<.*)?<4<"; then
+			if [ "${learn_first}" = "1" ]; then
 				# Learn-From-Home is higher priority than Streaming
 				if [ -z "${Learn_flow}" ]; then
 					Learn_flow="1:1${flowid}"
@@ -494,6 +508,8 @@ EOF
 			i="$((i+1))"
 		done
 	fi # Auto Bandwidth check
+
+	init_tc_cache
 } # set_tc_variables
 
 appdb() {
@@ -661,6 +677,24 @@ Is_Valid_Mark() {
 	/bin/grep -qE '^[!]?[A-Fa-f0-9]{2}([A-Fa-f0-9]{4}|[\*]{4})$'
 } # Is_Valid_Mark
 
+format_negated_arg() {
+	# Convert an optionally-negated value into iptables argument syntax.
+	# Example: !192.168.1.2 + -d -> ! -d 192.168.1.2
+	case "${1}" in
+		!*) printf "! %s %s" "${2}" "${1#!}" ;;
+		*)  printf " %s %s" "${2}" "${1}" ;;
+	esac
+} # format_negated_arg
+
+format_ipset_arg() {
+	# Convert an optionally-negated IPv4 value into ipset match syntax for
+	# the corresponding IPv6 rule generated by create_ipset().
+	case "${1}" in
+		!*) printf "%s %s %s %s %s %s" "-m" "set" "!" "--match-set" "${1#!}" "${2}" ;;
+		*)  printf "%s %s %s %s %s" "-m" "set" "--match-set" "${1}" "${2}" ;;
+	esac
+} # format_ipset_arg
+
 parse_appdb_rule() {
 	# Process an appdb custom rule into the appropriate tc filter syntax
 	# Input: $1 = Mark from appdb rule XXYYYY XX=Category(hex) YYYY=ID(hex or ****)
@@ -792,24 +826,25 @@ parse_iptablerule() {
 	local DOWN_Lip UP_Lip CIDR
 	local DOWN_Lip6 UP_Lip6
 	local DOWN_Rip UP_Rip
-	local PROTOS proto
+	local PROTOS PROTO_LIST proto
 	local DOWN_Lport UP_Lport
 	local DOWN_Rport UP_Rport
 	local tmpMark DOWN_mark UP_mark
 	local DOWN_dst UP_dst Dst_mark
+	local cat id
 	# local IP
 	# Check for acceptable IP format
 	if echo "${1}" | Is_Valid_CIDR; then
 		# print ! (if present) and remaining CIDR
-		DOWN_Lip="$(echo "${1}" | sed -E 's/^([!])?/\1 -d /')"
-		UP_Lip="$(echo "${1}" | sed -E 's/^([!])?/\1 -s /')"
+		DOWN_Lip="$(format_negated_arg "${1}" "-d")"
+		UP_Lip="$(format_negated_arg "${1}" "-s")"
 		# Only create ipset if there is no remote IP/CIDR defined, since the IPv6 rule would not work with remote IPv4 CIDR
 		if ! echo "${2}" | Is_Valid_CIDR; then
 			# Alternate syntax for IPv6 ipset matching
-			CIDR="$(echo "${1}" | sed -E 's/^!//')"
+			CIDR="${1#!}"
 			create_ipset "${CIDR}" # 2>/dev/null
-			DOWN_Lip6="$(echo "${1}" | sed -E 's/^([!])?(([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?)/-m set \1 --match-set \2 dst/')"
-			UP_Lip6="$(echo "${1}" | sed -E 's/^([!])?(([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?)/-m set \1 --match-set \2 src/')"
+			DOWN_Lip6="$(format_ipset_arg "${1}" "dst")"
+			UP_Lip6="$(format_ipset_arg "${1}" "src")"
 		fi
 	else
 		DOWN_Lip=""
@@ -822,8 +857,8 @@ parse_iptablerule() {
 	# Check for acceptable IP format
 	if echo "${2}" | Is_Valid_CIDR; then
 		# print ! (if present) and remaining CIDR
-		DOWN_Rip="$(echo "${2}" | sed -E 's/^([!])?/\1 -s /')"
-		UP_Rip="$(echo "${2}" | sed -E 's/^([!])?/\1 -d /')"
+		DOWN_Rip="$(format_negated_arg "${2}" "-s")"
+		UP_Rip="$(format_negated_arg "${2}" "-d")"
 	else
 		DOWN_Rip=""
 		UP_Rip=""
@@ -835,7 +870,7 @@ parse_iptablerule() {
 		PROTOS="${3}"
 	elif [ "${#4}" -gt "1" ] || [ "${#5}" -gt "1" ]; then
 		# proto=both & ports are defined
-		PROTOS="tcp>udp"		# separated by > because IFS will be temporarily set to '>' by calling function. TODO Fix Me
+		PROTOS="both"
 	else
 		# neither proto nor ports defined
 		PROTOS="all"
@@ -845,8 +880,8 @@ parse_iptablerule() {
 	if echo "${4}" | Is_Valid_Port; then
 		# Use multiport to specify any port specification:
 		# single port, multiple ports, port range
-		DOWN_Lport="-m multiport $(echo "${4}" | sed -E 's/^([!])?/\1 --dports /')"
-		UP_Lport="-m multiport $(echo "${4}" | sed -E 's/^([!])?/\1 --sports /')"
+		DOWN_Lport="-m multiport $(format_negated_arg "${4}" "--dports")"
+		UP_Lport="-m multiport $(format_negated_arg "${4}" "--sports")"
 	else
 		DOWN_Lport=""
 		UP_Lport=""
@@ -856,8 +891,8 @@ parse_iptablerule() {
 	if echo "${5}" | Is_Valid_Port; then
 		# Use multiport to specify any port specification:
 		# single port, multiple ports, port range
-		DOWN_Rport="-m multiport $(echo "${5}" | sed -E 's/^([!])?/\1 --sports /')"
-		UP_Rport="-m multiport $(echo "${5}" | sed -E 's/^([!])?/\1 --dports /')"
+		DOWN_Rport="-m multiport $(format_negated_arg "${5}" "--sports")"
+		UP_Rport="-m multiport $(format_negated_arg "${5}" "--dports")"
 	else
 		DOWN_Rport=""
 		UP_Rport=""
@@ -868,14 +903,16 @@ parse_iptablerule() {
 		tmpMark="${6}"		# Use a tmp variable since we have to manipulate the contents for ! and ****
 		DOWN_mark="-m mark"
 		UP_mark="-m mark"
-		if [ "$(echo "${tmpMark}" | cut -c 1)" = "!" ]; then		# first char is !
-			DOWN_mark="${DOWN_mark} !"
-			UP_mark="${UP_mark} !"
-			tmpMark="$(echo "${tmpMark}" | sed -E 's/^!//')"		# strip the !
-		fi
+		case "${tmpMark}" in
+			!*)
+				DOWN_mark="${DOWN_mark} !"
+				UP_mark="${UP_mark} !"
+				tmpMark="${tmpMark#!}"		# strip the !
+				;;
+		esac
 		# Extract category and appid from mark
-		cat="$(echo "${tmpMark}" | cut -c 1-2)"
-		id="$(echo "${tmpMark}" | cut -c 3-6)"
+		cat="${tmpMark%????}"
+		id="${tmpMark#??}"
 		# check if wildcard mark
 		if [ "${id}" = "****" ]; then
 			# replace **** with 0000 and use category mask
@@ -906,7 +943,12 @@ parse_iptablerule() {
 
 	# This block is redirected to the /tmp/flexqos_iprules file, so no extraneous output, please
 	# If proto=both we have to create 2 statements, one for tcp and one for udp.
-	for proto in ${PROTOS}; do
+	case "${PROTOS}" in
+		both) PROTO_LIST="tcp udp" ;;
+		*)    PROTO_LIST="${PROTOS}" ;;
+	esac
+
+	for proto in ${PROTO_LIST}; do
 		# download ipv4
 		printf "iptables -t mangle -A %s %s %s -p %s %s %s %s %s\n" "${SCRIPTNAME_DISPLAY}_down" "${DOWN_Lip}" "${DOWN_Rip}" "${proto}" "${DOWN_Lport}" "${DOWN_Rport}" "${DOWN_mark}" "${DOWN_dst}"
 		# upload ipv4
@@ -1017,14 +1059,17 @@ download_file() {
 	# Otherwise move it from the temp location to the destination.
 	if curl -fsL --retry 3 --connect-timeout 3 "${GIT_URL}/${1}" -o "/tmp/${1}"; then
 		if [ "$(md5sum "/tmp/${1}" | awk '{print $1}')" != "$(md5sum "${2}" 2>/dev/null | awk '{print $1}')" ]; then
-			mv -f "/tmp/${1}" "${2}"
+			mv -f "/tmp/${1}" "${2}" || return 1
 			logmsg "Updated $(basename "${1}")"
 		else
 			logmsg "File $(basename "${2}") is already up-to-date"
 			rm -f "/tmp/${1}" 2>/dev/null
 		fi
+		return 0
 	else
 		logmsg "Updating $(basename "${1}") failed"
+		rm -f "/tmp/${1}" 2>/dev/null
+		return 1
 	fi
 } # download_file
 
@@ -1104,7 +1149,11 @@ update() {
 		exit 5
 	fi
 	printf "Installing: %s...\n\n" "${SCRIPTNAME_DISPLAY}"
-	download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"
+	if ! download_file "$(basename "${SCRIPTPATH}")" "${SCRIPTPATH}"; then
+		Red "Download failed. Update aborted."
+		return 1
+	fi
+
 	exec sh "${SCRIPTPATH}" -install "${1}"
 	exit
 } # update
@@ -1239,23 +1288,24 @@ qos_stop() {
 }
 
 qos_start() {
-    local cur_type cur_enable need_start
+    local cur_type cur_enable need_apply
     # Start Adaptive QoS (Adaptive = qos_type 1, enable = 1)
     logmsg "Starting Adaptive QoS..."
-    need_start=0
+    need_apply=0
 
     cur_type="$(nvram get qos_type 2>/dev/null)"
     if [ -n "${cur_type}" ] && [ "${cur_type}" != "1" ]; then
         nvram set qos_type=1
+        need_apply=1
     fi
 
     cur_enable="$(nvram get qos_enable 2>/dev/null)"
     if [ -n "${cur_enable}" ] && [ "${cur_enable}" != "1" ]; then
         nvram set qos_enable=1
-        need_start=1
+        need_apply=1
     fi
 
-    if [ "${need_start}" = "1" ]; then
+    if [ "${need_apply}" = "1" ]; then
         service start_qos
         _fc_apply_policy on
         prompt_restart
@@ -1282,48 +1332,241 @@ _qs_int() { printf '%d' "$(_qs_to_dec "$1")"; }
 _qs_parse_time() {
     local t h m
     t="$(_qs_trim "$1")"
-    h="${t%%:*}"; m="${t#*:}"; [ "$t" = "$h" ] && m="0"
-    h="$(_qs_to_dec "$h")"; m="$(_qs_to_dec "$m")"
+
+    case "$t" in
+        ''|*[!0-9:]*|:*|*:|*:*:*) return 1 ;;
+    esac
+
+    h="${t%%:*}"
+    m="${t#*:}"
+    [ "$t" = "$h" ] && m="0"
+
+    case "$h" in ''|*[!0-9]*) return 1 ;; esac
+    case "$m" in ''|*[!0-9]*) return 1 ;; esac
+
+    h="$(_qs_to_dec "$h")"
+    m="$(_qs_to_dec "$m")"
+
     [ "$h" -ge 0 ] && [ "$h" -le 23 ] && [ "$m" -ge 0 ] && [ "$m" -le 59 ] || return 1
     printf '%02d %02d' "$h" "$m"
 }
 
-_qs_now_in_window() {
-    local sh=$(_qs_int "$1") sm=$(_qs_int "$2")
-    local eh=$(_qs_int "$3") em=$(_qs_int "$4")
-    local dow="${5:-*}"
+_qs_dow_matches() {
+    local dow day ok part s e oldifs
 
-    # DOW check
-    if [ "$dow" != "*" ]; then
-        local today="$(date +%w)" ok=0 part s e
-        IFS=','; for part in $dow; do
-            if echo "$part" | grep -q -- '-'; then
-                s="${part%-*}" ; e="${part#*-}"
-                [ "$today" -ge "$s" ] && [ "$today" -le "$e" ] && { ok=1; break; }
-            else
+    dow="${1:-*}"
+    day="$(_qs_int "${2:-0}")"
+    [ "$day" = "7" ] && day="0"
+
+    [ "$dow" = "*" ] && return 0
+
+    ok=0
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            *-*)
+                s="${part%-*}"
+                e="${part#*-}"
+                [ "$s" = "7" ] && s="0"
+                [ "$e" = "7" ] && e="0"
+
+                if [ "$s" -le "$e" ]; then
+                    [ "$day" -ge "$s" ] && [ "$day" -le "$e" ] && {
+                        ok=1
+                        break
+                    }
+                else
+                    { [ "$day" -ge "$s" ] || [ "$day" -le "$e" ]; } && {
+                        ok=1
+                        break
+                    }
+                fi
+                ;;
+            *)
                 [ "$part" = "7" ] && part="0"
-                [ "$today" = "$part" ] && { ok=1; break; }
-            fi
-        done; IFS=' '
-        [ "$ok" = 1 ] || return 1
-    fi
+                [ "$day" = "$part" ] && {
+                    ok=1
+                    break
+                }
+                ;;
+        esac
+    done
 
-    # Minute-of-day check
-    local now_h=$(_qs_int "$(date +%H)")
-    local now_m=$(_qs_int "$(date +%M)")
-    local now=$(( now_h * 60 + now_m ))
-    local start=$(( sh * 60 + sm ))
-    local end=$(( eh * 60 + em ))
+    IFS="$oldifs"
+    [ "$ok" = "1" ]
+}
+
+_qs_shift_dow_next_day() {
+    local dow part s e d shifted result oldifs
+
+    dow="${1:-*}"
+    [ "$dow" = "*" ] && { printf '*'; return 0; }
+
+    result=""
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            *-*)
+                s="${part%-*}"
+                e="${part#*-}"
+                [ "$s" = "7" ] && s="0"
+                [ "$e" = "7" ] && e="0"
+
+                if [ "$s" -le "$e" ]; then
+                    d="$s"
+                    while [ "$d" -le "$e" ]; do
+                        shifted=$(( (d + 1) % 7 ))
+                        [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                        d=$(( d + 1 ))
+                    done
+                else
+                    d="$s"
+                    while [ "$d" -le 6 ]; do
+                        shifted=$(( (d + 1) % 7 ))
+                        [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                        d=$(( d + 1 ))
+                    done
+                    d=0
+                    while [ "$d" -le "$e" ]; do
+                        shifted=$(( (d + 1) % 7 ))
+                        [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                        d=$(( d + 1 ))
+                    done
+                fi
+                ;;
+            *)
+                [ "$part" = "7" ] && part="0"
+                shifted=$(( (part + 1) % 7 ))
+                [ -n "$result" ] && result="${result},${shifted}" || result="${shifted}"
+                ;;
+        esac
+    done
+
+    IFS="$oldifs"
+    printf '%s' "$result"
+}
+
+_qs_expand_dow_for_cron() {
+    local dow part s e d result oldifs
+
+    dow="${1:-*}"
+    [ "$dow" = "*" ] && { printf '*'; return 0; }
+
+    result=""
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            *-*)
+                s="${part%-*}"
+                e="${part#*-}"
+                [ "$s" = "7" ] && s="0"
+                [ "$e" = "7" ] && e="0"
+
+                if [ "$s" -le "$e" ]; then
+                    d="$s"
+                    while [ "$d" -le "$e" ]; do
+                        [ -n "$result" ] && result="${result},${d}" || result="${d}"
+                        d=$(( d + 1 ))
+                    done
+                else
+                    d="$s"
+                    while [ "$d" -le 6 ]; do
+                        [ -n "$result" ] && result="${result},${d}" || result="${d}"
+                        d=$(( d + 1 ))
+                    done
+                    d=0
+                    while [ "$d" -le "$e" ]; do
+                        [ -n "$result" ] && result="${result},${d}" || result="${d}"
+                        d=$(( d + 1 ))
+                    done
+                fi
+                ;;
+            *)
+                [ "$part" = "7" ] && part="0"
+                [ -n "$result" ] && result="${result},${part}" || result="${part}"
+                ;;
+        esac
+    done
+
+    IFS="$oldifs"
+    printf '%s' "$result"
+}
+
+_qs_now_in_window() {
+    local sh sm eh em dow
+    local now_h now_m now start end check_day
+
+    sh="$(_qs_int "$1")"
+    sm="$(_qs_int "$2")"
+    eh="$(_qs_int "$3")"
+    em="$(_qs_int "$4")"
+    dow="${5:-*}"
+
+    # Minute-of-day check. For overnight windows, the post-midnight segment
+    # belongs to the previous schedule day for DOW matching.
+    now_h="$(_qs_int "$(date +%H)")"
+    now_m="$(_qs_int "$(date +%M)")"
+
+    now=$(( now_h * 60 + now_m ))
+    start=$(( sh * 60 + sm ))
+    end=$(( eh * 60 + em ))
 
     if [ "$start" -le "$end" ]; then
-        [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ]
+        [ "$now" -ge "$start" ] && [ "$now" -lt "$end" ] || return 1
+        check_day="$(date +%w)"
     else
-        [ "$now" -ge "$start" ] || [ "$now" -lt "$end" ]
+        if [ "$now" -ge "$start" ]; then
+            check_day="$(date +%w)"
+        elif [ "$now" -lt "$end" ]; then
+            check_day=$(( ($(_qs_int "$(date +%w)") + 6) % 7 ))
+        else
+            return 1
+        fi
     fi
+
+    _qs_dow_matches "$dow" "$check_day"
 }
 
 _qs_valid_dow() {
-    echo "$1" | grep -Eq '^(\*|([0-7](-[0-7])?)(,([0-7](-[0-7])?))*)$'
+    local dow part s e oldifs
+
+    dow="$1"
+    [ "$dow" = "*" ] && return 0
+    [ -n "$dow" ] || return 1
+
+    # Reject empty comma-separated fields before shell word splitting,
+    # otherwise values like "1," can be silently accepted as "1".
+    case "$dow" in
+        *,|,*|*,,*) return 1 ;;
+    esac
+
+    oldifs="$IFS"
+    IFS=','
+
+    for part in $dow; do
+        case "$part" in
+            [0-7])
+                ;;
+            [0-7]-[0-7])
+                # Accept wraparound ranges such as 5-1. They are expanded
+                # before being passed to cron because not all cron variants
+                # accept ranges whose start is greater than their end.
+                ;;
+            *)
+                IFS="$oldifs"
+                return 1
+                ;;
+        esac
+    done
+
+    IFS="$oldifs"
+    return 0
 }
 
 _qs_clear_jobs() {
@@ -1334,7 +1577,7 @@ _qs_clear_jobs() {
 
 _qs_apply_jobs() {
     _qs_clear_jobs
-    local n=0 aligned=0 rec en rest dow st et sh sm eh em sh_s sm_s eh_s em_s out ok
+    local n=0 aligned=0 rec en rest dow cron_dow end_dow st et sh sm eh em sh_s sm_s eh_s em_s out ok
 
     # No schedules? Clear cron and LEAVE QoS state as-is.
     [ -z "$SCHEDULE" ] && return 0
@@ -1368,9 +1611,19 @@ _qs_apply_jobs() {
         sh="$(_qs_to_dec "$sh_s")"; sm="$(_qs_to_dec "$sm_s")"
         eh="$(_qs_to_dec "$eh_s")"; em="$(_qs_to_dec "$em_s")"
 
-        # Add cron jobs using *separate arguments* (most robust with cru)
-        n=$((n+1)); cru a "${QOS_CRON_ON}_${n}"  "$sm" "$sh" "*" "*" "$dow" "$SCRIPTPATH" -qosstart
-        n=$((n+1)); cru a "${QOS_CRON_OFF}_${n}" "$em" "$eh" "*" "*" "$dow" "$SCRIPTPATH" -qosstop
+        # Add cron jobs using *separate arguments* (most robust with cru).
+        # Expand DOW before passing it to cron so wraparound ranges such as
+        # 5-1 behave like _qs_dow_matches() instead of relying on cron syntax.
+        cron_dow="$(_qs_expand_dow_for_cron "$dow")"
+
+        # Overnight schedules stop on the following DOW, e.g. Fri 22:00 -> Sat 06:00.
+        if [ $(( sh * 60 + sm )) -gt $(( eh * 60 + em )) ]; then
+            end_dow="$(_qs_shift_dow_next_day "$cron_dow")"
+        else
+            end_dow="$cron_dow"
+        fi
+        n=$((n+1)); cru a "${QOS_CRON_ON}_${n}"  "$sm" "$sh" "*" "*" "$cron_dow" "$SCRIPTPATH" -qosstart
+        n=$((n+1)); cru a "${QOS_CRON_OFF}_${n}" "$em" "$eh" "*" "*" "$end_dow" "$SCRIPTPATH" -qosstop
 
         # Align immediate state
         if _qs_now_in_window "$sh" "$sm" "$eh" "$em" "$dow"; then aligned=1; fi
@@ -2143,11 +2396,12 @@ validate_iptables_rules() {
 
 write_iptables_rules() {
 	# loop through iptables rules and write an iptables command to a temporary file for later execution
-	local OLDIFS
 	local localip remoteip proto lport rport mark class
+
 	if [ -z "${iptables_rules}" ]; then
 		return 0
 	fi
+
 	{
 		printf "iptables -t mangle -F %s 2>/dev/null\n" "${SCRIPTNAME_DISPLAY}_down"
 		printf "iptables -t mangle -F %s 2>/dev/null\n" "${SCRIPTNAME_DISPLAY}_up"
@@ -2156,48 +2410,41 @@ write_iptables_rules() {
 			printf "ip6tables -t mangle -F %s 2>/dev/null\n" "${SCRIPTNAME_DISPLAY}_up"
 		fi
 	} > "/tmp/${SCRIPTNAME}_iprules"
-	OLDIFS="${IFS}"		# Save existing field separator
-	IFS=">"				# Set custom field separator to match rule format
+
 	# read the rules, 1 per line and break into separate fields
-	echo "${iptables_rules}" | sed 's/</\n/g' | while read -r localip remoteip proto lport rport mark class
+	printf '%s\n' "${iptables_rules}" | sed 's/</\n/g' | while IFS=">" read -r localip remoteip proto lport rport mark class
 	do
 		# Ensure at least one criteria field is populated
 		if [ -n "${localip}${remoteip}${proto}${lport}${rport}${mark}" ]; then
-			# Process the rule and the stdout containing the resulting rule gets saved to the temporary script file
+			# Process the rule and save the resulting commands to the temporary script file
 			parse_iptablerule "${localip}" "${remoteip}" "${proto}" "${lport}" "${rport}" "${mark}" "${class}" >> "/tmp/${SCRIPTNAME}_iprules" 2>/dev/null
 		fi
 	done
-	IFS="${OLDIFS}"		# Restore saved field separator
 } # write_iptables_rules
 
 write_appdb_rules() {
 	# Write the user appdb rules to the existing tcrules file created during write_appdb_static_rules()
-	local OLDIFS
 	local mark class
+
 	# Save the current filter rules once to avoid repeated calls in parse_appdb_rule() to determine existing prios
 	"${TC}" filter show dev "${tclan}" parent 1: > "/tmp/${SCRIPTNAME}_tmp_tcfilterdown"
 	"${TC}" filter show dev "${tcwan}" parent 1: > "/tmp/${SCRIPTNAME}_tmp_tcfilterup"
 
-	# loop through appdb rules and write a tc command to a temporary script file
-	OLDIFS="${IFS}"		# Save existing field separator
-	IFS=">"				# Set custom field separator to match rule format
-
 	# read the rules, 1 per line and break into separate fields
-	echo "${appdb_rules}" | sed 's/</\n/g' | while read -r mark class
+	printf '%s\n' "${appdb_rules}" | sed 's/</\n/g' | while IFS=">" read -r mark class
 	do
 		# Ensure the appdb mark is populated
 		if [ -n "${mark}" ]; then
 			parse_appdb_rule "${mark}" "${class}" >> "/tmp/${SCRIPTNAME}_tcrules" 2>/dev/null
 		fi
 	done
-	IFS="${OLDIFS}"		# Restore old field separator
 } # write_appdb_rules
 
 get_fq_quantum() {
 	local BANDWIDTH
-	BANDWIDTH="${1}"
+	BANDWIDTH="${1:-0}"
 
-	if [ "${BANDWIDTH}" -lt "51200" ]; then
+	if [ "${BANDWIDTH}" -gt "0" ] && [ "${BANDWIDTH}" -lt "51200" ]; then
 		printf "quantum 300\n"
 	fi
 } # get_fq_quantum
@@ -2207,11 +2454,12 @@ get_fq_target() {
 	# https://github.com/tohojo/sqm-scripts/blob/master/src/functions.sh
 	local BANDWIDTH
 	local TARGET INTERVAL
-	BANDWIDTH="${1}"
+	BANDWIDTH="${1:-0}"
 
 	# for ATM the worst case expansion including overhead seems to be 33 cells of 53 bytes each
 	# MAX DELAY = 1000 * 1000 * 33 * 53 * 8 / 1000  max delay in microseconds at 1kbps
-	TARGET=$(/usr/bin/awk -vBANDWIDTH="${BANDWIDTH}" 'BEGIN { print int( 1000 * 1000 * 33 * 53 * 8 / 1000 / BANDWIDTH ) }')
+	[ "${BANDWIDTH}" -gt "0" ] || return
+	TARGET=$((1000 * 33 * 53 * 8 / BANDWIDTH))
 	if [ "${TARGET}" -gt "5000" ]; then
 		# Increase interval by the same amount that target got increased
 		INTERVAL=$(( (100 - 5) * 1000 + TARGET ))
@@ -2221,14 +2469,24 @@ get_fq_target() {
 
 write_custom_qdisc() {
 	local i
-	if [ "$(am_settings_get "${SCRIPTNAME}"_qdisc)" != "0" ]; then
+	local down_fq_quantum down_fq_target
+	local up_fq_quantum up_fq_target
+
+	ensure_tc_variables
+
+	if [ "${QDISC:-0}" != "0" ]; then
+		down_fq_quantum="$(get_fq_quantum "${DownCeil}")"
+		down_fq_target="$(get_fq_target "${DownCeil}")"
+		up_fq_quantum="$(get_fq_quantum "${UpCeil}")"
+		up_fq_target="$(get_fq_target "${UpCeil}")"
+
 		{
 			printf "qdisc replace dev %s parent 1:2 handle 102: fq_codel noecn\n" "${tclan}"
 			printf "qdisc replace dev %s parent 1:2 handle 102: fq_codel noecn\n" "${tcwan}"
 			for i in 0 1 2 3 4 5 6 7
 			do
-				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s\n" "${tclan}" "${i}" "${i}" "$(get_fq_quantum "${DownCeil}")" "$(get_fq_target "${DownCeil}")"
-				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s noecn\n" "${tcwan}" "${i}" "${i}" "$(get_fq_quantum "${UpCeil}")" "$(get_fq_target "${UpCeil}")"
+				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s\n" "${tclan}" "${i}" "${i}" "${down_fq_quantum}" "${down_fq_target}"
+				printf "qdisc replace dev %s parent 1:1%s handle 11%s: fq_codel %s %s noecn\n" "${tcwan}" "${i}" "${i}" "${up_fq_quantum}" "${up_fq_target}"
 			done
 		} >> "/tmp/${SCRIPTNAME}_tcrules" 2>/dev/null
 	fi
@@ -2251,17 +2509,18 @@ check_qos_tc() {
 validate_tc_rules() {
 	# Check the existing tc filter rules against the user configuration. If any rule missing, force creation of all rules
 	# Must run after set_tc_variables() to ensure flowid can be determined
-	local OLDIFS filtermissing
+	local filtermissing
 	local mark class flowid
+
 	{
 		# print a list of existing filters in the format of an appdb rule for easy comparison. Write to tmp file
 		"${TC}" filter show dev "${tclan}" parent 1: | sed -nE '/flowid/ { N; s/\n//g; s/.*flowid (1:1[0-7]).*mark 0x[48]0([0-9a-fA-F]{6}).*/<\2>\1/p }'
 		"${TC}" filter show dev "${tcwan}" parent 1: | sed -nE '/flowid/ { N; s/\n//g; s/.*flowid (1:1[0-7]).*mark 0x[48]0([0-9a-fA-F]{6}).*/<\2>\1/p }'
 	} > "/tmp/${SCRIPTNAME}_checktcrules" 2>/dev/null
-	OLDIFS="${IFS}"
-	IFS=">"
+
 	filtermissing="0"
-	while read -r mark class
+
+	while IFS=">" read -r mark class
 	do
 		if [ -n "${mark}" ]; then
 			flowid="$(get_flowid "${class}")"
@@ -2272,9 +2531,9 @@ validate_tc_rules() {
 			fi
 		fi
 	done <<EOF
-$(echo "${appdb_rules}" | sed 's/</\n/g')
+$(printf '%s\n' "${appdb_rules}" | sed 's/</\n/g')
 EOF
-	IFS="${OLDIFS}"
+
 	if [ "${filtermissing}" -gt "0" ]; then
 		# reapply tc rules
 		return 1
@@ -2307,8 +2566,9 @@ startup() {
 	install_webui mount
 	generate_bwdpi_arrays
 	get_config
-	_fc_apply_policy on
-	_flush_conntrack_
+	# Defer flowcache and conntrack handling until after
+	# qos_schedule_apply_from_config() has aligned the final QoS state.
+	# This avoids avoidable fc/conntrack churn during scheduled-off windows.
 
 	cru d "${SCRIPTNAME}"_5min 2>/dev/null
 	sleepdelay=0
@@ -2361,6 +2621,9 @@ startup() {
 	qos_schedule_apply_from_config
 	if [ "$(nvram get qos_enable)" != "1" ]; then
 		_fc_apply_policy off
+		_flush_conntrack_
+	else
+		_fc_apply_policy on
 		_flush_conntrack_
 	fi
 } # startup
@@ -2496,9 +2759,7 @@ needrestart=0		# initialize variable used in prompt_restart()
 
 case "${arg1}" in
 	'start'|'check')
-		logmsg "$0 (pid=$$) called in ${mode} mode with $# args: $*"
-		SCHEDULE="$(am_settings_get "${SCRIPTNAME}"_schedule)"
-		if [ -n "$SCHEDULE" ]; then qos_start; fi
+		logmsg "invoked: action=${1:-none} mode=${mode} pid=$$ ppid=$PPID args='$*'"
 		startup
 		;;
 	'appdb')
