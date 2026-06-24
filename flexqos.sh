@@ -12,8 +12,8 @@
 # Contributors: @maghuro
 # shellcheck disable=SC1090,SC1091,SC2039,SC2154,SC3043
 # amtm NoMD5check
-version=1.5.4
-release=2026-06-21
+version=1.5.5
+release=2026-06-23
 # Forked from FreshJR_QOS v8.8, written by FreshJR07 https://github.com/FreshJR07/FreshJR_QOS
 # License
 #  FlexQoS is free to use under the GNU General Public License, version 3 (GPL-3.0).
@@ -203,8 +203,14 @@ init_tc_cache() {
 	local QOS_OVERHEAD
 	local QOS_ATM
 
-	QDISC="$(am_settings_get "${SCRIPTNAME}"_qdisc)"
-	[ -z "${QDISC}" ] && QDISC="0"
+	case "$(am_settings_get "${SCRIPTNAME}"_qdisc)" in
+    	0)
+        	QDISC="0"
+        	;;
+    	*)
+        	QDISC="1"
+        	;;
+	esac
 
 	# Cache the MTU/ATM-derived minimum once per run instead of recalculating it
 	# in get_burst(), get_cburst(), and get_quantum() for every generated class.
@@ -252,7 +258,7 @@ get_burst() {
 	# If the calculated burst is less than ASUS' minimum value of 3200, use 3200
 	# to avoid problems with child and leaf classes outside of FlexQoS scope that use 3200.
 	# If using fq_codel option, use the cached MTU/ATM-derived minimum packet size.
-	if [ "${QDISC:-0}" = "0" ]; then
+	if [ "${QDISC:-1}" = "0" ]; then
 		if [ "${BURST}" -lt 3200 ]; then
 			BURST=3200
 		fi
@@ -275,7 +281,7 @@ get_cburst() {
 	# If the calculated burst is less than ASUS' minimum value of 3200, use 3200
 	# to avoid problems with child and leaf classes outside of FlexQoS scope that use 3200.
 	if [ "${BURST}" -lt 3200 ]; then
-		if [ "${QDISC:-0}" = "0" ]; then
+		if [ "${QDISC:-1}" = "0" ]; then
 			BURST=3200
 		else
 			BURST="${MIN_PACKET}"
@@ -826,7 +832,7 @@ parse_iptablerule() {
 	local DOWN_Lip UP_Lip CIDR
 	local DOWN_Lip6 UP_Lip6
 	local DOWN_Rip UP_Rip
-	local PROTOS PROTO_LIST proto
+	local PROTOS PROTO1 PROTO2 proto
 	local DOWN_Lport UP_Lport
 	local DOWN_Rport UP_Rport
 	local tmpMark DOWN_mark UP_mark
@@ -941,19 +947,26 @@ parse_iptablerule() {
 	DOWN_dst="-j MARK --set-mark 0x80${Dst_mark}ffff/0xc03fffff"
 	UP_dst="-j MARK --set-mark 0x40${Dst_mark}ffff/0xc03fffff"
 
-	# This block is redirected to the /tmp/flexqos_iprules file, so no extraneous output, please
-	# If proto=both we have to create 2 statements, one for tcp and one for udp.
+	# Expand protocols without depending on IFS or overwriting $1-$7.
 	case "${PROTOS}" in
-		both) PROTO_LIST="tcp udp" ;;
-		*)    PROTO_LIST="${PROTOS}" ;;
+    	both)
+        	PROTO1="tcp"
+        	PROTO2="udp"
+        	;;
+    	*)
+        	PROTO1="${PROTOS}"
+        	PROTO2=""
+        	;;
 	esac
 
-	for proto in ${PROTO_LIST}; do
+	# This block is redirected to /tmp/flexqos_iprules, so emit no extraneous output.
+	for proto in "${PROTO1}" "${PROTO2}"; do
+    [ -n "${proto}" ] || continue
 		# download ipv4
 		printf "iptables -t mangle -A %s %s %s -p %s %s %s %s %s\n" "${SCRIPTNAME_DISPLAY}_down" "${DOWN_Lip}" "${DOWN_Rip}" "${proto}" "${DOWN_Lport}" "${DOWN_Rport}" "${DOWN_mark}" "${DOWN_dst}"
 		# upload ipv4
 		printf "iptables -t mangle -A %s %s %s -p %s %s %s %s %s\n" "${SCRIPTNAME_DISPLAY}_up" "${UP_Lip}" "${UP_Rip}" "${proto}" "${UP_Lport}" "${UP_Rport}" "${UP_mark}" "${UP_dst}"
-		# If rule contains no IPv4 remote addresses, and IPv6 is enabled, add a corresponding rule for IPv6
+		# If the rule contains no IPv4 remote address and IPv6 is enabled, add the corresponding IPv6 rule.
 		if [ "${IPv6_enabled}" != "disabled" ] && [ -z "${DOWN_Rip}" ]; then
 			# download ipv6
 			printf "ip6tables -t mangle -A %s %s -p %s %s %s %s %s\n" "${SCRIPTNAME_DISPLAY}_down" "${DOWN_Lip6}" "${proto}" "${DOWN_Lport}" "${DOWN_Rport}" "${DOWN_mark}" "${DOWN_dst}"
@@ -1366,6 +1379,11 @@ _qs_dow_matches() {
 
     for part in $dow; do
         case "$part" in
+            0-7)
+                # 0-7 represents every day.
+                ok=1
+                break
+                ;;
             *-*)
                 s="${part%-*}"
                 e="${part#*-}"
@@ -1410,6 +1428,11 @@ _qs_shift_dow_next_day() {
 
     for part in $dow; do
         case "$part" in
+            0-7)
+                # Shifting every day by one day is still every day.
+                result="*"
+                break
+                ;;
             *-*)
                 s="${part%-*}"
                 e="${part#*-}"
@@ -1462,6 +1485,11 @@ _qs_expand_dow_for_cron() {
 
     for part in $dow; do
         case "$part" in
+            0-7)
+                # Full week; additional list entries cannot add anything.
+                result="*"
+                break
+                ;;
             *-*)
                 s="${part%-*}"
                 e="${part#*-}"
@@ -2474,7 +2502,7 @@ write_custom_qdisc() {
 
 	ensure_tc_variables
 
-	if [ "${QDISC:-0}" != "0" ]; then
+	if [ "${QDISC:-1}" != "0" ]; then
 		down_fq_quantum="$(get_fq_quantum "${DownCeil}")"
 		down_fq_target="$(get_fq_target "${DownCeil}")"
 		up_fq_quantum="$(get_fq_quantum "${UpCeil}")"

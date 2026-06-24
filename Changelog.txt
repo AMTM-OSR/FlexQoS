@@ -1,3 +1,24 @@
+v1.5.5 (23-Jun-2026)
+  - FIXED: 0-7 schedules would become Sunday-only
+  - FIXED: Genuine default-value regression, restored original intentions
+  - CHANGED: Protocol expansion was dependent on the caller’s IFS
+
+v1.5.4 (21-Jun-2026)
+  - First contributions from @ran-dall
+  - FIXED:(schedule): preserve IFS when checking active QoS schedule windows
+  - FIXED:(firewall): prevent duplicate QoS POSTROUTING jumps
+  - FIXED:(qos): remove IFS dependency from protocol expansion
+  - CHANGED:(qos): localize custom rule field splitting
+  - FIXED:(update): abort install when script download fails
+  - FIXED:(qos): apply startup path when forcing Adaptive QoS type
+  - CHANGED:(logging): clarify script invocation log
+  - CHANGED:(qos): cache tc and qdisc generation values
+  - CHANGED:(firewall): reduce subshells in iptables rule parsing
+  - CHANGED:(qos): cache Learn-From-Home priority check
+  - FIXED:(schedule): handle overnight DOW windows correctly
+  - FIXED:(schedule): normalize DOW ranges and parser helpers
+  - FIXED:(schedule): defer flowcache handling until QoS state is aligned
+
 v1.5.3 (27-Feb-2026)
   - NEW: Added AMTM automatic update support via amtmupdate (includes amtmupdate check).
   - NEW: Added doScriptUpdateFromAMTM toggle to enable/disable AMTM-triggered updates (default: enabled).
